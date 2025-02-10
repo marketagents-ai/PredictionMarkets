@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import logging
 from typing import List, Dict, Any, Optional
@@ -89,7 +90,7 @@ class OrchestrationDataInserter:
                 except Exception as e:
                     self.logger.error(f"Error inserting action: {e}")
                     raise
-
+                
     async def insert_environment_state(
         self,
         environment_name: str,
@@ -103,12 +104,16 @@ class OrchestrationDataInserter:
             VALUES ($1, $2, $3, $4)
         """
         try:
+            # Serialize both state_data and metadata
+            serialized_state = serialize_for_json(state_data)
+            serialized_metadata = serialize_for_json(metadata) if metadata else {}
+            
             await self.db.execute(
                 query,
                 environment_name,
                 round_num,
-                json.dumps(state_data),
-                json.dumps(metadata or {})
+                json.dumps(serialized_state),
+                json.dumps(serialized_metadata)
             )
         except Exception as e:
             self.logger.error(f"Error inserting environment state: {e}")
@@ -166,3 +171,20 @@ class OrchestrationDataInserter:
         except Exception as e:
             self.logger.error(f"Error converting agent ID {agent_id} to UUID: {e}")
             raise
+
+    
+def serialize_for_json(obj: Any) -> Any:
+    """Helper function to serialize objects for JSON"""
+    if isinstance(obj, Enum):
+        return obj.value
+    elif hasattr(obj, 'model_dump'):
+        return serialize_for_json(obj.model_dump())
+    elif hasattr(obj, 'dict'):
+        return serialize_for_json(obj.dict())
+    elif isinstance(obj, (list, tuple)):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif hasattr(obj, '__dict__'):
+        return serialize_for_json(obj.__dict__)
+    return obj

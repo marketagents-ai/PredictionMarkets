@@ -1,10 +1,11 @@
 # orchestrator_config.yaml
 
-num_agents: 4
+num_agents: 2
 max_rounds: 1
 environment_order:
-  - group_chat
-  - research
+#  - group_chat
+#  - research
+   - prediction_markets
 tool_mode: true
 agent_config:
   knowledge_base: "hamlet_kb"
@@ -22,30 +23,30 @@ llm_configs:
       max_tokens: 4096
       temperature: 0.5
       use_cache: true
-    - name: "hermes"
-      model: "openai/NousResearch/Hermes-3-Llama-3.1-8B"
-      client: "litellm"
-      max_tokens: 4096
-      temperature: 0.5
-      use_cache: true
-    - name: "deepseek"
-      model: "openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-      client: "litellm"
-      max_tokens: 4096
-      temperature: 0.5
-      use_cache: true
-    - name: "qwq"
-      model: "openai/Qwen/QwQ-32B-Preview"
-      client: "litellm"
-      max_tokens: 4096
-      temperature: 0.5
-      use_cache: true
-    - name: "qwen"
-      model: "openai/Qwen/Qwen2.5-7B-Instruct"
-      client: "litellm"
-      max_tokens: 4096
-      temperature: 0.5
-      use_cache: true
+#    - name: "hermes"
+#      model: "openai/NousResearch/Hermes-3-Llama-3.1-8B"
+#      client: "litellm"
+#      max_tokens: 4096
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "deepseek"
+#      model: "openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+#      client: "litellm"
+#      max_tokens: 4096
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "qwq"
+#      model: "openai/Qwen/QwQ-32B-Preview"
+#      client: "litellm"
+#      max_tokens: 4096
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "qwen"
+#      model: "openai/Qwen/Qwen2.5-7B-Instruct"
+#      client: "litellm"
+#      max_tokens: 4096
+#      temperature: 0.5
+#      use_cache: true
 
 environment_configs:
   group_chat:
@@ -62,7 +63,26 @@ environment_configs:
     initial_topic: "Hamlet's famous 'To be or not to be' soliloquy', record your aha moments with emojis"
     sub_rounds: 2
     group_size: 4
-    schema_model: "LiteraryAnalysis" 
+    schema_model: "LiteraryAnalysis"
+  prediction_markets:
+    name: "prediction_markets"
+    api_url: "http://localhost:8004"
+    market: "Will Hamlet take action against King Claudius before Act 4?"
+    description: |
+      This market predicts whether Hamlet will take direct action against King Claudius 
+      before Act 4 of the play. 'Taking action' is defined as any direct confrontation 
+      or attempt to harm/expose Claudius.
+    resolution_criteria: |
+      The market will resolve to YES if Hamlet makes any direct attempt to confront, 
+      harm, or publicly expose Claudius as a murderer before Act 4. It will resolve 
+      to NO if Hamlet only contemplates action or takes indirect steps without 
+      confrontation.
+    resolution_date: "2024-12-31"
+    initial_price: 0.5
+    initial_liquidity: 1000.0
+    min_bet: 1.0
+    max_bet: 100.0
+
 protocol: "acl_message"
 database_config:
   db_host: "localhost"

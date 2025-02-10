@@ -16,7 +16,20 @@ class AgentConfig(BaseModel):
         description="Flag to indicate if LLM should be used"
     )
 
-class GroupChatConfig(BaseModel):
+class EnvironmentConfig(BaseSettings):
+    name: str = Field(
+        ...,
+        description="Name of the group chat environment"
+    )
+    api_url: str = Field(
+        ...,
+        description="API endpoint for the environment"
+    )
+    model_config = {
+        "extra": "allow"
+    }
+
+class GroupChatConfig(EnvironmentConfig):
     name: str = Field(
         ...,
         description="Name of the group chat environment"
@@ -38,7 +51,7 @@ class GroupChatConfig(BaseModel):
         description="API endpoint for group chat environment"
     )
 
-class ResearchConfig(BaseModel):
+class ResearchConfig(EnvironmentConfig):
     """Configuration for research environment orchestration"""
     name: str = Field(
         default="research",
@@ -63,6 +76,51 @@ class ResearchConfig(BaseModel):
     schema_model: str = Field(
         default="LiteraryAnalysis",
         description="Name of Pydantic model defining research output schema"
+    )
+
+class PredictionMarketConfig(EnvironmentConfig):
+    """Configuration for prediction market environment orchestration"""
+    name: str = Field(
+        default="prediction_markets",
+        description="Name of the prediction market environment"
+    )
+    api_url: str = Field(
+        default="http://localhost:8004",
+        description="API endpoint for prediction market environment"
+    )
+    market: str = Field(
+        ...,
+        description="The topic/question being predicted"
+    )
+    description: str = Field(
+        ...,
+        description="Detailed description of the prediction market topic"
+    )
+    resolution_criteria: str = Field(
+        ...,
+        description="Clear criteria for how the market will be resolved"
+    )
+    resolution_date: str = Field(
+        ...,
+        description="Date when the market will be resolved (YYYY-MM-DD)"
+    )
+    initial_price: float = Field(
+        default=0.5,
+        description="Initial probability estimate (0-1)",
+        ge=0.0,
+        le=1.0
+    )
+    initial_liquidity: float = Field(
+        default=1000.0,
+        description="Initial liquidity pool size"
+    )
+    min_bet: float = Field(
+        default=1.0,
+        description="Minimum bet amount allowed"
+    )
+    max_bet: float = Field(
+        default=100.0,
+        description="Maximum bet amount allowed"
     )
 
 class LLMConfigModel(BaseModel):
@@ -144,7 +202,7 @@ class OrchestratorConfig(BaseSettings):
         ...,
         description="List of LLM configurations"
     )
-    environment_configs: Dict[str, Union[GroupChatConfig, ResearchConfig]] = Field(
+    environment_configs: Dict[str, EnvironmentConfig] = Field(
         ...,
         description="Configurations for different environments"
     )
