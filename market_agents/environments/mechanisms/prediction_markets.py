@@ -1,10 +1,13 @@
 # prediction_market.py
 
+from enum import Enum
 from typing import Dict, Any, List, Optional, Type, Union, Tuple
 from pydantic import BaseModel, Field, validator, computed_field
 from datetime import datetime
 import random
 import string
+
+from market_agents.environments.environment import ActionSpace, EnvironmentHistory, Mechanism, MultiAgentEnvironment
 
 class LocalAction(BaseModel):
     agent_id: str
@@ -50,33 +53,123 @@ class LocalEnvironmentStep(BaseModel):
     info: Dict[str, Any]
 
 
-class PredictionBet(BaseModel):
-    event_id: str = Field(..., description="Identifier of the market event")
-    outcome: str = Field(..., description="Outcome option (e.g. 'Yes' or 'No', or a range label)")
-    stake: float = Field(..., description="Amount of stake placed")
-    price: Optional[float] = Field(None, description="Price at which the bet was placed (optional)")
+class ActionType(Enum):
+    BET = "BET"
+    HOLD = "HOLD"
 
-    @validator('stake')
-    def stake_positive(cls, v):
-        if v <= 0:
-            raise ValueError("Stake must be positive")
+class Outcome(Enum):
+    YES = "Yes"
+    NO = "No"
+
+class PredictionMarketAction(BaseModel):
+    """External action model for LLM agents"""
+    action_type: ActionType = Field(
+        ..., 
+        description="Type of action ('BET' or 'HOLD')"
+    )
+    outcome: Optional[Outcome] = Field(
+        None, 
+        description="The outcome to bet on (e.g. 'Yes' or 'No')"
+    )
+    stake: Optional[float] = Field(
+        None, 
+        description="Amount to stake on the outcome",
+        ge=1.0,
+        le=100.0
+    )
+    price: Optional[float] = Field(
+        None, 
+        description="Price/probability for the outcome",
+        ge=0.0,
+        le=1.0
+    )
+
+    @validator('outcome')
+    def validate_outcome_for_bet(cls, v, values):
+        """Ensure outcome is provided for BET actions"""
+        if values.get('action_type') == ActionType.BET and not v:
+            raise ValueError("Outcome must be provided for BET actions")
         return v
 
-class PredictionMarketAction(LocalAction):
+    @validator('stake')
+    def validate_stake_for_bet(cls, v, values):
+        """Ensure stake is provided and positive for BET actions"""
+        if values.get('action_type') == ActionType.BET:
+            if v is None:
+                raise ValueError("Stake must be provided for BET actions")
+            if v <= 0:
+                raise ValueError("Stake must be positive for BET actions")
+        return v
+
+    @validator('price')
+    def validate_price_for_bet(cls, v, values):
+        """Ensure price is provided and between 0 and 1 for BET actions"""
+        if values.get('action_type') == ActionType.BET:
+            if v is None:
+                raise ValueError("Price must be provided for BET actions")
+            if not 0 <= v <= 1:
+                raise ValueError("Price must be between 0 and 1")
+        return v
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "action_type": "BET",
+                    "outcome": "Yes",
+                    "stake": 50.0,
+                    "price": 0.7
+                },
+                {
+                    "action_type": "HOLD",
+                    "outcome": None,
+                    "stake": None,
+                    "price": None
+                }
+            ]
+        }
+    }
+
+class PredictionBet(PredictionMarketAction):
+    """Internal bet model with additional fields"""
+    event_id: str = Field(..., description="Market event ID")
+
+class PredictionMarketLocalAction(LocalAction):
+    """Local action wrapper for prediction markets"""
     action: PredictionBet
 
     @classmethod
-    def sample(cls, agent_id: str) -> 'PredictionMarketAction':
+    def sample(cls, agent_id: str) -> 'PredictionMarketLocalAction':
+        """Generate a random valid action"""
+        action = PredictionMarketAction(
+            action_type="BET",
+            outcome=random.choice(['Yes', 'No']),
+            stake=random.uniform(1, 100),
+            price=random.uniform(0.1, 0.9)
+        )
+        return cls(
+            agent_id=agent_id,
+            action=PredictionBet(**action.model_dump(), event_id="sample_event")
+        )
 
-        event_id = random.choice(["unemployment_Feb", "jobs_Feb", "kanye_tweets"])
-        outcome = random.choice(["Yes", "No"])
-        stake = round(random.uniform(10, 100), 2)
-        price = round(random.uniform(0.3, 0.7), 2)
-        bet = PredictionBet(event_id=event_id, outcome=outcome, stake=stake, price=price)
-        return cls(agent_id=agent_id, action=bet)
+    @classmethod
+    def action_schema(cls) -> Dict[str, Any]:
+        """Return the schema for LLM agents"""
+        return PredictionMarketAction.model_json_schema()
+
+    @classmethod
+    def from_market_action(cls, agent_id: str, action: PredictionMarketAction, event_id: str) -> 'PredictionMarketLocalAction':
+        """Create a local action from a market action and event ID"""
+        internal_bet = PredictionBet(**action.model_dump(), event_id=event_id)
+        return cls(agent_id=agent_id, action=internal_bet)
 
 class GlobalPredictionMarketAction(GlobalAction):
-    actions: Dict[str, PredictionMarketAction]
+    """Global action container for prediction markets"""
+    actions: Dict[str, PredictionMarketLocalAction]
+
+    @classmethod
+    def from_local_actions(cls, local_actions: Dict[str, PredictionMarketLocalAction]) -> "GlobalPredictionMarketAction":
+        return cls(actions=local_actions)
 
 class MarketState(BaseModel):
     event_id: str = Field(..., description="Unique identifier for the event")
@@ -88,9 +181,12 @@ class MarketState(BaseModel):
     outcome: Optional[str] = Field(default=None, description="The resolved outcome, if any")
 
     def update_with_bet(self, bet: PredictionBet):
-        if bet.outcome not in self.options:
-            raise ValueError(f"Outcome {bet.outcome} is not a valid option for event {self.event_id}")
-        self.total_bets[bet.outcome] = self.total_bets.get(bet.outcome, 0.0) + bet.stake
+        outcome = bet.outcome.value if hasattr(bet.outcome, 'value') else bet.outcome
+        
+        if outcome not in self.options:
+            raise ValueError(f"Outcome {outcome} is not a valid option for event {self.event_id}")
+        
+        self.total_bets[outcome] = self.total_bets.get(outcome, 0.0) + bet.stake
         total = sum(self.total_bets.get(opt, 0.0) for opt in self.options)
         if total > 0:
             self.current_prices = {opt: self.total_bets.get(opt, 0.0) / total for opt in self.options}
@@ -109,102 +205,168 @@ class PredictionMarketGlobalObservation(GlobalObservation):
     observations: Dict[str, PredictionMarketLocalObservation]
     market_states: Dict[str, MarketState] = Field(default_factory=dict, description="Global market states")
 
-class PredictionMarketActionSpace(BaseModel):
-    allowed_actions: List[Type[LocalAction]] = Field(default_factory=lambda: [PredictionMarketAction])
+class PredictionMarketActionSpace(ActionSpace):
+    allowed_actions: List[Type[LocalAction]] = Field(
+        default=[PredictionMarketLocalAction],
+        description="Allowed actions in prediction market"
+    )
 
-    def sample(self, agent_id: str) -> PredictionMarketAction:
-        return PredictionMarketAction.sample(agent_id)
-
-    def get_action_schema(self) -> Dict[str, Any]:
-        return PredictionMarketAction.schema()
+    @classmethod
+    def get_action_schema(cls) -> Dict[str, Any]:
+        """Return the schema for LLM agents"""
+        return PredictionMarketAction.model_json_schema()
 
 class PredictionMarketObservationSpace(BaseModel):
     allowed_observations: List[Type[LocalObservation]] = Field(default_factory=lambda: [PredictionMarketLocalObservation])
 
-class PredictionMarketMechanism(BaseModel):
+class PredictionMarketMechanism(Mechanism):
     max_rounds: int = Field(default=10, description="Maximum number of rounds for the market")
     current_round: int = Field(default=0, description="Current round number")
     markets: Dict[str, MarketState] = Field(default_factory=dict)
     sequential: bool = Field(default=False, description="Whether the mechanism is sequential")
+    initial_liquidity: float = Field(default=1000.0, description="Initial market liquidity")
+    round_summaries: List[Dict[str, Any]] = Field(default_factory=list, description="History of all round actions")
+    last_step: Optional[EnvironmentStep] = Field(default=None, description="Last environment step")
 
     def step(self, action: GlobalPredictionMarketAction) -> EnvironmentStep:
         self.current_round += 1
 
+        # Process bets and update markets
+        round_actions = {}
         for agent_id, local_action in action.actions.items():
             bet = local_action.action
-            if bet.event_id not in self.markets:
-                self.markets[bet.event_id] = MarketState(
-                    event_id=bet.event_id,
-                    question=f"Market poll for event {bet.event_id}",
-                    options=["Yes", "No"],
-                    total_bets={},
-                    current_prices={}
-                )
-                uniform = 0.5
-                self.markets[bet.event_id].current_prices = {"Yes": uniform, "No": uniform}
-            self.markets[bet.event_id].update_with_bet(bet)
+            round_actions[agent_id] = bet.dict()
+            
+            if bet.action_type != ActionType.HOLD:
+                if bet.event_id not in self.markets:
+                    self.markets[bet.event_id] = MarketState(
+                        event_id=bet.event_id,
+                        question=f"Market poll for event {bet.event_id}",
+                        options=["Yes", "No"],
+                        total_bets={},
+                        current_prices={"Yes": 0.5, "No": 0.5}
+                    )
+                self.markets[bet.event_id].update_with_bet(bet)
 
-        if self.current_round >= self.max_rounds:
+        # Store round actions in history
+        self.round_summaries.append(round_actions)
+
+        # Build local observations for each agent
+        local_observations: Dict[str, PredictionMarketLocalObservation] = {}
+        agent_rewards: Dict[str, float] = {}
+        
+        market_obs = PredictionMarketObservation(market_states=self.markets)
+        for agent_id in action.actions.keys():
+            local_obs = PredictionMarketLocalObservation(
+                agent_id=agent_id,
+                observation=market_obs
+            )
+            local_observations[agent_id] = local_obs
+            agent_rewards[agent_id] = 1.0
+
+        # Check if markets should be resolved
+        done = (self.current_round >= self.max_rounds)
+        if done:
             for market in self.markets.values():
                 if not market.resolved:
                     market.resolved = True
                     market.outcome = random.choice(market.options)
 
-        market_obs = PredictionMarketObservation(market_states=self.markets)
-        local_obs = {
-            agent_id: PredictionMarketLocalObservation(
-                agent_id=agent_id,
-                observation=market_obs
-            )
-            for agent_id in action.actions.keys()
-        }
+        # Create global observation
         global_obs = PredictionMarketGlobalObservation(
-            observations=local_obs,
+            observations=local_observations,
             market_states=self.markets
         )
-        done = self.current_round >= self.max_rounds
-        info = {"current_round": self.current_round}
-        return EnvironmentStep(global_observation=global_obs, done=done, info=info)
 
-    def get_global_state(self) -> Any:
+        step_result = EnvironmentStep(
+            global_observation=global_obs,
+            done=done,
+            info={
+                "round": self.current_round,
+                "agent_rewards": agent_rewards,
+                "market_states": {k: v.dict() for k, v in self.markets.items()}
+            }
+        )
+        self.last_step = step_result
+        return step_result
+
+    def get_global_state(self) -> Dict[str, Any]:
+        """Return relevant global state for agent context"""
         return {
             "current_round": self.current_round,
-            "markets": {eid: market.dict() for eid, market in self.markets.items()}
+            "max_rounds": self.max_rounds,
+            "markets": {k: v.dict() for k, v in self.markets.items()},
+            "round_summaries": self.round_summaries,
+            "round_summaries_count": len(self.round_summaries),
+            "last_step": self.last_step.dict() if self.last_step else None
         }
 
-class PredictionMarketEnv(BaseModel):
+    def reset(self) -> None:
+        """Reset mechanism state"""
+        self.current_round = 0
+        self.markets = {}
+        self.round_summaries = []
+        self.last_step = None
+
+    def get_global_state(self) -> Dict[str, Any]:
+        """Return relevant global state for agent context"""
+        return {
+            "current_round": self.current_round,
+            "max_rounds": self.max_rounds,
+            "markets": {k: v.dict() for k, v in self.markets.items()},
+            "last_step": self.last_step.dict() if self.last_step else None
+        }
+
+    def reset(self) -> None:
+        self.current_round = 0
+        self.markets = {}
+        self.last_step = None
+
+class PredictionMarketEnvironment(MultiAgentEnvironment):
     name: str = Field(default="Prediction Market", description="Name of the prediction market environment")
     current_step: int = Field(default=0, description="Current simulation step")
     max_steps: int = Field(default=10, description="Maximum number of steps")
-    action_space: PredictionMarketActionSpace = Field(default_factory=PredictionMarketActionSpace)
-    observation_space: PredictionMarketObservationSpace = Field(default_factory=PredictionMarketObservationSpace)
-    history: List[Tuple[GlobalAction, EnvironmentStep]] = Field(default_factory=list)
-    mechanism: PredictionMarketMechanism = Field(default_factory=PredictionMarketMechanism)
+    action_space: PredictionMarketActionSpace = Field(
+        default_factory=PredictionMarketActionSpace,
+        description="Action space for prediction markets"
+    )
+    observation_space: PredictionMarketObservationSpace = Field(
+        default_factory=PredictionMarketObservationSpace,
+        description="Observation space for prediction markets"
+    )
+    mechanism: PredictionMarketMechanism = Field(
+        default_factory=lambda: PredictionMarketMechanism(initial_liquidity=1000.0),
+        description="Prediction market mechanism"
+    )
+    history: EnvironmentHistory = Field(
+        default_factory=EnvironmentHistory,
+        description="History of environment steps"
+    )
 
     def step(self, actions: GlobalPredictionMarketAction) -> EnvironmentStep:
         step_result = self.mechanism.step(actions)
         self.current_step += 1
-        self.history.append((actions, step_result))
+        self.history.add_step(action=actions, step=step_result)
         return step_result
 
     def reset(self) -> GlobalObservation:
         self.current_step = 0
-        self.history = []
-        self.mechanism.current_round = 0
-        self.mechanism.markets = {}
+        self.history = EnvironmentHistory()
+        self.mechanism.reset()
         return GlobalObservation(observations={})
 
     def get_global_state(self) -> Any:
-        return self.mechanism.get_global_state()
-
-    def render(self):
-        print("Global State:")
-        print(self.get_global_state())
+        return {
+            **self.mechanism.get_global_state(),
+            "current_step": self.current_step,
+            "max_steps": self.max_steps,
+            "steps": self.history.steps if self.history else []
+        }
 
 if __name__ == "__main__":
     num_agents = 3
     num_steps = 5
-    env = PredictionMarketEnv(max_steps=num_steps)
+    env = PredictionMarketEnvironment(max_steps=num_steps)
     agent_ids = [f"Agent{i}" for i in range(num_agents)]
 
     for step in range(num_steps):
