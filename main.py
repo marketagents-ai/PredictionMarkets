@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
+from market_agents.orchestrators.prediction_markets_orchestrator import PredictionMarketsOrchestrator
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.agents.personas.persona import load_or_generate_personas
 
@@ -169,7 +170,8 @@ async def main():
 
     orchestrator_registry = {
         "group_chat": GroupChatOrchestrator,
-        "research": ResearchOrchestrator
+        "research": ResearchOrchestrator,
+        "prediction_markets": PredictionMarketsOrchestrator
     }
 
     meta_orch = MetaOrchestrator(
@@ -177,8 +179,8 @@ async def main():
         agents=agents,
         orchestrator_registry=orchestrator_registry
     )
+    
     await meta_orch.run_orchestration()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
