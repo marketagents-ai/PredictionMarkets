@@ -5,7 +5,8 @@ max_rounds: 1
 environment_order:
 #  - group_chat
 #  - research
-   - prediction_markets
+  - web_research
+  - prediction_markets
 tool_mode: true
 agent_config:
   knowledge_base: "hamlet_kb"
@@ -56,6 +57,7 @@ environment_configs:
     initial_topic: "Hamlet's famous 'To be or not to be' soliloquy. Use emoji's and colloquial language for discussion"
     sub_rounds: 2
     group_size: 4
+
   research:
     name: "literary_research"
     api_url: "http://localhost:8003"
@@ -64,6 +66,7 @@ environment_configs:
     sub_rounds: 2
     group_size: 4
     schema_model: "LiteraryAnalysis"
+
   prediction_markets:
     name: "prediction_markets"
     api_url: "http://localhost:8004"
@@ -82,6 +85,33 @@ environment_configs:
     initial_liquidity: 1000.0
     min_bet: 1.0
     max_bet: 100.0
+
+  web_research:
+    name: "web_research"
+    api_url: "http://localhost:8005"
+    initial_query: "Does Hamlet take action against King Claudius before Act 4?"
+    sub_rounds: 2
+    search_config:
+      max_concurrent_requests: 50
+      rate_limit: 0.1
+      content_max_length: 4000
+      request_timeout: 30
+      urls_per_query: 2
+      use_ai_summary: true
+      methods: 
+        - "selenium"
+        - "playwright"
+        - "beautifulsoup"
+        - "newspaper3k"
+        - "scrapy"
+        - "requests_html"
+        - "mechanicalsoup"
+        - "httpx"
+      default_method: "newspaper3k"
+      headers:
+        User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+        Accept-Language: "en-US,en;q=0.5"
 
 protocol: "acl_message"
 database_config:

@@ -1,7 +1,7 @@
 # config.py
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Union
+from typing import Any, List, Dict, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import yaml
 from pathlib import Path
@@ -77,6 +77,13 @@ class ResearchConfig(EnvironmentConfig):
         default="LiteraryAnalysis",
         description="Name of Pydantic model defining research output schema"
     )
+
+class WebResearchConfig(BaseModel):
+    name: str
+    api_url: str
+    initial_query: str
+    sub_rounds: int = 3
+    search_config: Dict[str, Any]
 
 class PredictionMarketConfig(EnvironmentConfig):
     """Configuration for prediction market environment orchestration"""

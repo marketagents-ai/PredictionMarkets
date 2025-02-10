@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from market_agents.memory.memory import MemoryObject
 from market_agents.agents.market_agent_prompter import MarketAgentPromptVariables
-from minference.lite.models import CallableTool, StructuredTool
+from minference.lite.models import CallableTool, ResponseFormat, StructuredTool
 from market_agents.agents.cognitive_tools import (
     perception_tool,
     reflection_tool
@@ -177,7 +177,7 @@ class PerceptionStep(CognitiveStep):
 
 class ActionStep(CognitiveStep):
     """
-    Decides the agent's next action using zero or more schemas/tools,
+    Decides the agent's next action using zero or more tools,
     then applies it in the environment.
     """
     step_name: str = "action"
@@ -193,51 +193,50 @@ class ActionStep(CognitiveStep):
         description="Either a single or list of action schema(s)/tool(s)"
     )
 
-    perception: Optional[str] = Field(
-        default=None,
-        description="Optional perception from the previous step"
-    )
-
     async def execute(self, agent: BaseModel) -> Union[str, Dict[str, Any]]:
         """
-        Decide on an action to execute in the environment,
-        possibly using structured or callable tools.
-        Then calls environment.step(...) with the resulting action.
+        Execute actions using tools from the action space.
+        Handles both single tools and sequential workflows.
         """
         environment = agent.environments[self.environment_name]
         action_space = environment.action_space if environment else None
 
-        serialized_action_space = {
-            "allowed_actions": [
-                action_type.__name__
-                for action_type in getattr(action_space, "allowed_actions", [])
-            ],
-            "constraints": getattr(action_space, "get_constraints", lambda: {})(),
-        }
+        tools = getattr(action_space, "tools", [])
+        
+        if agent.chat_thread:
+            if len(tools) > 1:
+                agent.chat_thread.tools = tools
+                agent.chat_thread.llm_config.response_format = ResponseFormat.workflow
+                agent.chat_thread.workflow_step = 0
+            elif len(tools) == 1:
+                agent.chat_thread.tools = tools
+                agent.chat_thread.forced_output = tools[0]
+            else:
+                action_tool = StructuredTool(
+                    json_schema=action_space.get_action_schema(),
+                    name="react_reasoning",
+                    description="Generate thought-action-observation cycle"
+                )
+                agent.chat_thread.forced_output = action_tool
 
         variables = MarketAgentPromptVariables(
             environment_name=self.environment_name,
             environment_info=self.environment_info,
             perception=agent.last_perception,
-            action_space=serialized_action_space,
+            action_space={
+                "tools": [tool.name for tool in tools] if tools else [],
+                "allowed_actions": [
+                    action_type.__name__
+                    for action_type in getattr(action_space, "allowed_actions", [])
+                ],
+                "constraints": getattr(action_space, "get_constraints", lambda: {})()
+            },
             last_action=agent.last_action,
             observation=agent.last_observation
         )
+        
         action_prompt = agent.prompt_manager.get_action_prompt(variables.model_dump())
-
-        if agent.chat_thread and self.structured_tool:
-            action_tool = StructuredTool(
-                json_schema=action_space.get_action_schema(),
-                name="react_reasoning",
-                description="Generate thought-action-observation cycle"
-            )
-            agent.chat_thread.forced_output = action_tool
-
-        if agent.chat_thread.new_message:
-            print(agent.chat_thread.new_message)
-        else:
-            print(f"NO NEW MESSAGE")
-
+        
         if agent.chat_thread:
             agent.chat_thread.new_message = action_prompt
 
@@ -250,17 +249,17 @@ class ActionStep(CognitiveStep):
             agent,
             content=result,
             metadata={
-                "action_space": serialized_action_space,
+                "action_space": variables.action_space,
                 "perception": agent.last_perception,
                 "last_action": agent.last_action,
                 "observation": agent.last_observation,
                 "environment_name": self.environment_name,
-                "environment_info": self.environment_info
+                "environment_info": self.environment_info,
+                "tools_used": [tool.name for tool in tools] if tools else []
             }
         )
 
         agent.last_action = result
-
         return result
     
 class ReflectionStep(CognitiveStep):
