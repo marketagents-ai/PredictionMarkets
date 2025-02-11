@@ -5,6 +5,7 @@ import asyncio
 
 from pydantic import BaseModel, Field
 
+from market_agents.environments.environment import StrAction
 from market_agents.memory.memory import MemoryObject
 from market_agents.agents.market_agent_prompter import MarketAgentPromptVariables
 from minference.lite.models import CallableTool, ResponseFormat, StructuredTool
@@ -103,7 +104,6 @@ class PerceptionStep(CognitiveStep):
             for mem in stm_cognitive
         ]
 
-        # Debug: Color print short-term memories with content
         print("\nShort-term Memory Results:")
         memory_strings = [f"Memory {i+1}:\n{mem['content']}" for i, mem in enumerate(short_term_memories)]
         print("\033[94m" + "\n\n".join(memory_strings) + "\033[0m")
@@ -194,16 +194,13 @@ class ActionStep(CognitiveStep):
     )
 
     async def execute(self, agent: BaseModel) -> Union[str, Dict[str, Any]]:
-        """
-        Execute actions using tools from the action space.
-        Handles both single tools and sequential workflows.
-        """
         environment = agent.environments[self.environment_name]
         action_space = environment.action_space if environment else None
-
         tools = getattr(action_space, "tools", [])
+        allowed_actions = getattr(action_space, "allowed_actions", [])
         
         if agent.chat_thread:
+            # Handle tools first
             if len(tools) > 1:
                 agent.chat_thread.tools = tools
                 agent.chat_thread.llm_config.response_format = ResponseFormat.workflow
@@ -211,7 +208,11 @@ class ActionStep(CognitiveStep):
             elif len(tools) == 1:
                 agent.chat_thread.tools = tools
                 agent.chat_thread.forced_output = tools[0]
-            else:
+            elif not allowed_actions or (len(allowed_actions) == 1 and allowed_actions[0] == StrAction):
+                agent.chat_thread.llm_config.response_format = ResponseFormat.text
+                agent.chat_thread.forced_output = None
+                agent.chat_thread.tools = []
+            elif allowed_actions and issubclass(allowed_actions[0], BaseModel):
                 action_tool = StructuredTool(
                     json_schema=action_space.get_action_schema(),
                     name="react_reasoning",
@@ -227,7 +228,7 @@ class ActionStep(CognitiveStep):
                 "tools": [tool.name for tool in tools] if tools else [],
                 "allowed_actions": [
                     action_type.__name__
-                    for action_type in getattr(action_space, "allowed_actions", [])
+                    for action_type in allowed_actions
                 ],
                 "constraints": getattr(action_space, "get_constraints", lambda: {})()
             },
@@ -244,6 +245,10 @@ class ActionStep(CognitiveStep):
             return agent.chat_thread
 
         result = await agent.execute()
+
+        if isinstance(result, str) and (not allowed_actions or 
+            (len(allowed_actions) == 1 and allowed_actions[0].__name__ == "StrAction")):
+            result = {"agent_id": agent.id, "action": result}
 
         await self.store_memory(
             agent,

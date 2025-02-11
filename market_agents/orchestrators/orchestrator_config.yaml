@@ -6,7 +6,7 @@ environment_order:
 #  - group_chat
 #  - research
   - web_research
-  - prediction_markets
+#  - prediction_markets
 tool_mode: true
 agent_config:
   knowledge_base: "hamlet_kb"
@@ -89,8 +89,9 @@ environment_configs:
   web_research:
     name: "web_research"
     api_url: "http://localhost:8005"
-    initial_query: "Does Hamlet take action against King Claudius before Act 4?"
+    initial_query: "Top cryptocurrency to invest in right now?"
     sub_rounds: 2
+    schema_model:
     search_config:
       max_concurrent_requests: 50
       rate_limit: 0.1

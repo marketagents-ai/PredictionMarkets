@@ -74,7 +74,7 @@ class ParallelCognitiveProcessor:
         await self.storage_service.store_ai_requests(self.get_all_requests())
 
         for agent, output in zip(agents, outputs):
-            text_content = (output.json_object.object if output.json_object else output.str_content)
+            text_content = (output.json_object.object if output.json_object else output.content)
             memory_obj = MemoryObject(
                 agent_id=agent.id,
                 cognitive_step="perception",
@@ -112,7 +112,7 @@ class ParallelCognitiveProcessor:
         await self.storage_service.store_ai_requests(self.get_all_requests())
 
         for agent, output in zip(agents, outputs):
-            text_content = (output.json_object.object if output.json_object else output.str_content)
+            text_content = (output.json_object.object if output.json_object else output.content)
             memory_obj = MemoryObject(
                 agent_id=agent.id,
                 cognitive_step="action",
@@ -161,7 +161,7 @@ class ParallelCognitiveProcessor:
 
             reflection_content = (output.json_object.object
                                   if output and output.json_object
-                                  else output.str_content)
+                                  else output.content)
 
             log_reflection(self.logger, agent.id, reflection_content)
 

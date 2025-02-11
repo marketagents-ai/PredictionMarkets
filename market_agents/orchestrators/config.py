@@ -82,8 +82,12 @@ class WebResearchConfig(BaseModel):
     name: str
     api_url: str
     initial_query: str
-    sub_rounds: int = 3
+    sub_rounds: int = 2
     search_config: Dict[str, Any]
+    schema_model: str = Field(
+        default="ResearchSummary",
+        description="Name of Pydantic model defining research output schema"
+    )
 
 class PredictionMarketConfig(EnvironmentConfig):
     """Configuration for prediction market environment orchestration"""

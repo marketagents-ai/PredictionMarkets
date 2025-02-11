@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
+import importlib
 import logging
-from typing import List, Dict, Any, Type
+from typing import List, Dict, Any, Type, Union
 
+from pydantic import BaseModel
+
+from market_agents.environments.mechanisms.research import ResearchAction
 from market_agents.web_search.web_search_config import WebSearchConfig
 from market_agents.orchestrators.base_orchestrator import BaseEnvironmentOrchestrator
 from market_agents.orchestrators.config import OrchestratorConfig, WebResearchConfig
@@ -50,20 +54,24 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
             logger=self.logger,
             tool_mode=self.orchestrator_config.tool_mode
         )
+
+        self.summary_model = self.get_schema_model(self.config.schema_model) if self.config.schema_model else None
+        self.logger.info(f"Loaded schema model: {self.summary_model}")
         
-        # Fixed initialization
         self.environment = WebSearchEnvironment(
             name=self.config.name,
             mechanism=WebSearchMechanism(
                 search_config=WebSearchConfig.from_yaml(self.config.search_config),
                 max_rounds=self.config.sub_rounds,
                 current_query=self.config.initial_query
-            )
+            ),
+            summary_model=self.summary_model
         )
 
-        # Register environment with agents
         for agent in self.agents:
             agent.environments[self.config.name] = self.environment
+            agent.task = f"Research the following topic using web search:\n{self.config.initial_query}"
+            agent._refresh_prompts()
 
         self.logger.info(f"Initialized WebResearchOrchestrator for environment: {self.config.name}")
 
@@ -108,18 +116,23 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
             agent._refresh_prompts()
 
     async def _run_sub_round(self, round_num: int, sub_round: int):
-        """Executes a single sub-round of the web research process."""
+        """Executes a single sub-round with both search and summary phases"""
         try:
             # 1. Perception Phase
             perceptions = await self._run_perception_phase(round_num, sub_round)
             
-            # 2. Action Phase (Web Search)
-            step_result = await self._run_action_phase(round_num, sub_round)
+            # 2. Search Phase
+            self.environment.switch_phase("search")
+            search_result = await self._run_action_phase(round_num, sub_round, "search")
             
-            # 3. Reflection Phase
-            await self._run_reflection_phase(round_num, sub_round)
+            # 3. Summary Phase
+            self.environment.switch_phase("summary")
+            summary_result = await self._run_action_phase(round_num, sub_round, "summary")
             
-            return step_result
+            # 4. Reflection Phase
+            reflections = await self._run_reflection_phase(round_num, sub_round)
+            
+            return summary_result
             
         except Exception as e:
             self.logger.error(f"Error in sub-round {sub_round} of round {round_num}: {e}")
@@ -143,27 +156,74 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
         
         return perceptions
 
-    async def _run_action_phase(self, round_num: int, sub_round: int):
-        """Handles the action phase of the cognitive cycle."""
-        self.logger.info(f"Round {round_num}.{sub_round}: Executing agent web searches...")
+    async def _run_action_phase(self, round_num: int, sub_round: int, phase: str):
+        """Handles the action phase of the cognitive cycle for either search or summary."""
+        self.logger.info(f"Round {round_num}.{sub_round}: Executing agent {phase}...")
         
         actions = await self.cognitive_processor.run_parallel_action(
             self.agents,
             self.config.name
         )
         
-        agent_summaries = await self._process_agent_actions(actions)
-        self.logger.info(f"Processed web search queries: {agent_summaries}")
+        agent_results = await self._process_agent_actions(actions)
+        self.logger.info(f"Processed {phase} results: {agent_results}")
         
-        global_actions = await self._create_global_actions(actions)
+        global_actions = await self._create_global_actions(actions, phase)
         
-        # Await the async step
         step_result = await self.environment.step(GlobalAction(actions=global_actions))
         
         if step_result and step_result.global_observation:
             await self._update_agent_observations(step_result)
         
         return step_result
+
+    async def _create_global_actions(self, actions, phase: str) -> Dict[str, Union[WebSearchAction, str, Dict]]:
+        """Create global actions from individual agent actions."""
+        global_actions = {}
+        
+        for agent, action in zip(self.agents, actions or []):
+            try:
+                if phase == "search":
+                    if isinstance(action, str) or (action.content and not action.json_object):
+                        content = action if isinstance(action, str) else action.content
+                        global_actions[agent.id] = WebSearchAction(
+                            agent_id=agent.id,
+                            query=content or self.config.initial_query,
+                            num_results=self.config.search_config.get('urls_per_query', 5)
+                        )
+                    elif action.json_object and action.json_object.object:
+                        raw_content = action.json_object.object
+                        if isinstance(raw_content, dict) and 'query' in raw_content:
+                            global_actions[agent.id] = WebSearchAction(
+                                agent_id=agent.id,
+                                query=raw_content['query'],
+                                num_results=raw_content.get('num_results', self.config.search_config.get('urls_per_query', 5))
+                            )
+                else:
+                    if action and action.json_object and action.json_object.object:
+                        content = action.json_object.object
+                        if self.summary_model:
+                            content = self.summary_model.model_validate(content)
+                        global_actions[agent.id] = ResearchAction(
+                            agent_id=agent.id,
+                            action=content
+                        )
+                    else:
+                        empty_content = self.summary_model.model_construct() if self.summary_model else {}
+                        global_actions[agent.id] = ResearchAction(
+                            agent_id=agent.id,
+                            action=empty_content
+                        )
+                        
+            except Exception as e:
+                self.logger.error(f"Error creating global action for agent {agent.id}: {str(e)}")
+                empty_content = self.summary_model.model_construct() if self.summary_model else {}
+                global_actions[agent.id] = ResearchAction(
+                    agent_id=agent.id,
+                    action=empty_content
+                )
+        
+        return global_actions
 
     async def _process_agent_actions(self, actions):
         """Process individual agent actions and create summaries."""
@@ -172,13 +232,18 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
         for agent, action in zip(self.agents, actions or []):
             try:
                 content = None
-                if action and action.json_object and action.json_object.object:
-                    # Parse into WebSearchActionInput format
-                    raw_content = action.json_object.object
-                    content = WebSearchActionInput(
-                        query=raw_content.get('query'),
-                        num_results=raw_content.get('num_results', 5)
-                    ).model_dump()
+                if action:
+                    if isinstance(action, str) or (action.content and not action.json_object):
+                        content = action if isinstance(action, str) else action.content
+                    elif action.json_object and action.json_object.object:
+                        raw_content = action.json_object.object
+                        if isinstance(raw_content, dict) and 'query' in raw_content:
+                            content = WebSearchActionInput(
+                                query=raw_content.get('query'),
+                                num_results=raw_content.get('num_results', 5)
+                            ).model_dump()
+                        else:
+                            content = raw_content
 
                 agent.last_action = content
                 if content:
@@ -192,39 +257,6 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
                 agent.last_action = None
         
         return agent_summaries
-
-    async def _create_global_actions(self, actions) -> Dict[str, WebSearchAction]:
-        """Create global actions from individual agent actions."""
-        global_actions = {}
-        
-        for agent, action_response in zip(self.agents, actions or []):
-            try:
-                if action_response and action_response.json_object and action_response.json_object.object:
-                    # Parse into WebSearchActionInput first
-                    action_data = action_response.json_object.object
-                    llm_action = WebSearchActionInput(
-                        query=action_data.get('query'),
-                        num_results=action_data.get('num_results', 5)
-                    )
-                    
-                    # Convert to internal WebSearchAction
-                    local_action = WebSearchAction.from_llm_action(agent.id, llm_action)
-                else:
-                    self.logger.warning(f"No valid action response for agent {agent.id}")
-                    local_action = WebSearchAction.sample(agent.id)
-                
-                global_actions[agent.id] = local_action
-                
-            except Exception as e:
-                self.logger.error(
-                    f"Error creating action for agent {agent.id}: {str(e)}\n"
-                    f"Raw action data: {action_response.json_object.object if action_response and action_response.json_object else None}",
-                    exc_info=True
-                )
-                local_action = WebSearchAction.sample(agent.id)
-                global_actions[agent.id] = local_action
-        
-        return global_actions
 
     async def _update_agent_observations(self, step_result):
         """Update agent observations based on step results."""
@@ -275,6 +307,15 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
             "environment": self.config.name,
             "global_state": self.environment.get_global_state()
         }
+    
+    def get_schema_model(self, schema_name: str) -> Type[BaseModel]:
+        """Load the summary schema model class"""
+        try:
+            schemas_module = importlib.import_module('market_agents.orchestrators.research_schemas')
+            model_class = getattr(schemas_module, schema_name)
+            return model_class
+        except (ImportError, AttributeError) as e:
+            raise ValueError(f"Could not load schema model '{schema_name}': {e}")
 
     async def print_summary(self):
         """Print final summary of web research results."""
@@ -286,5 +327,9 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
         for agent in self.agents:
             self.logger.info(f"\nAgent {agent.id} final search results:")
             if agent.last_observation and isinstance(agent.last_observation, WebSearchLocalObservation):
-                for result in agent.last_observation.search_results or []:
-                    self.logger.info(f"- {result.title}: {result.url}")
+                if isinstance(agent.last_observation.search_results, list):
+                    for result in agent.last_observation.search_results:
+                        if isinstance(result, dict):
+                            self.logger.info(f"- {result.get('title', 'No title')}: {result.get('url', 'No URL')}")
+                        elif hasattr(result, 'title') and hasattr(result, 'url'):
+                            self.logger.info(f"- {result.title}: {result.url}")

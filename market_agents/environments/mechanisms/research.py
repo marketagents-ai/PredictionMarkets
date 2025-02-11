@@ -252,6 +252,24 @@ class ResearchMechanism(Mechanism):
         self.last_step = None
         logger.info("ResearchMechanism reset complete.")
 
+    def _calculate_research_reward(self, action: BaseModel) -> float:
+        """Calculate reward based on research action quality"""
+        reward = 0.3
+
+        fields = action.model_fields
+        filled_fields = sum(1 for f in fields if getattr(action, f, None) is not None)
+        completeness = filled_fields / len(fields)
+        reward += 0.4 * completeness
+
+        total_content_length = sum(
+            len(str(getattr(action, f, ""))) 
+            for f in fields
+        )
+        content_reward = min(total_content_length / (100 * len(fields)), 1.0)
+        reward += 0.3 * content_reward
+
+        return reward
+
 class ResearchEnvironment(MultiAgentEnvironment):
     """
     Multi-agent environment that orchestrates a research session.
