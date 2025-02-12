@@ -12,7 +12,7 @@ from market_agents.orchestrators.config import OrchestratorConfig, WebResearchCo
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.orchestrators.orchestration_data_inserter import OrchestrationDataInserter, serialize_for_json
 from market_agents.orchestrators.parallel_cognitive_steps import ParallelCognitiveProcessor
-from market_agents.environments.environment import EnvironmentStep, GlobalAction, LocalEnvironmentStep
+from market_agents.environments.environment import EnvironmentStep, GlobalAction, LocalEnvironmentStep, StrAction
 from market_agents.environments.mechanisms.web_research import (
     WebSearchActionInput,
     WebSearchEnvironment,
@@ -58,14 +58,17 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
         self.summary_model = self.get_schema_model(self.config.schema_model) if self.config.schema_model else None
         self.logger.info(f"Loaded schema model: {self.summary_model}")
         
+        mechanism = WebSearchMechanism(
+            search_config=WebSearchConfig.from_yaml(self.config.search_config),
+            max_rounds=self.config.sub_rounds,
+            current_query=self.config.initial_query
+        )
+        
         self.environment = WebSearchEnvironment(
             name=self.config.name,
-            mechanism=WebSearchMechanism(
-                search_config=WebSearchConfig.from_yaml(self.config.search_config),
-                max_rounds=self.config.sub_rounds,
-                current_query=self.config.initial_query
-            ),
-            summary_model=self.summary_model
+            initial_query=self.config.initial_query,
+            summary_model=self.summary_model,
+            mechanism=mechanism
         )
 
         for agent in self.agents:
@@ -74,7 +77,6 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
             agent._refresh_prompts()
 
         self.logger.info(f"Initialized WebResearchOrchestrator for environment: {self.config.name}")
-
     async def setup_environment(self):
         """Setup or reset the web search environment."""
         self.logger.info("Setting up the Web Research Environment...")
@@ -177,7 +179,7 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
         
         return step_result
 
-    async def _create_global_actions(self, actions, phase: str) -> Dict[str, Union[WebSearchAction, str, Dict]]:
+    async def _create_global_actions(self, actions, phase: str) -> Dict[str, Union[WebSearchAction, ResearchAction, StrAction]]:
         """Create global actions from individual agent actions."""
         global_actions = {}
         
@@ -197,31 +199,66 @@ class WebResearchOrchestrator(BaseEnvironmentOrchestrator):
                             global_actions[agent.id] = WebSearchAction(
                                 agent_id=agent.id,
                                 query=raw_content['query'],
-                                num_results=raw_content.get('num_results', self.config.search_config.get('urls_per_query', 5))
+                                num_results=self.config.search_config.get('urls_per_query', 5)
+                                #num_results=raw_content.get('num_results', self.config.search_config.get('urls_per_query', 5))
                             )
                 else:
-                    if action and action.json_object and action.json_object.object:
-                        content = action.json_object.object
-                        if self.summary_model:
-                            content = self.summary_model.model_validate(content)
-                        global_actions[agent.id] = ResearchAction(
+                    if self.summary_model:
+                        try:
+                            if action and action.json_object and action.json_object.object:
+                                content = action.json_object.object
+                                validated_content = self.summary_model.model_validate(content)
+                                global_actions[agent.id] = ResearchAction(
+                                    agent_id=agent.id,
+                                    action=validated_content
+                                )
+                            else:
+                                empty_content = self.summary_model.model_construct()
+                                global_actions[agent.id] = ResearchAction(
+                                    agent_id=agent.id,
+                                    action=empty_content
+                                )
+                        except Exception as e:
+                            self.logger.error(f"Error creating ResearchAction: {e}")
+                            empty_content = self.summary_model.model_construct()
+                            global_actions[agent.id] = ResearchAction(
+                                agent_id=agent.id,
+                                action=empty_content
+                            )
+                    else:
+                        content = ""
+                        if action and action.content:
+                            content = action.content
+                        elif action and action.json_object and action.json_object.object:
+                            content = str(action.json_object.object)
+                        elif isinstance(action, str):
+                            content = action
+                        
+                        global_actions[agent.id] = StrAction(
                             agent_id=agent.id,
                             action=content
-                        )
-                    else:
-                        empty_content = self.summary_model.model_construct() if self.summary_model else {}
-                        global_actions[agent.id] = ResearchAction(
-                            agent_id=agent.id,
-                            action=empty_content
                         )
                         
             except Exception as e:
                 self.logger.error(f"Error creating global action for agent {agent.id}: {str(e)}")
-                empty_content = self.summary_model.model_construct() if self.summary_model else {}
-                global_actions[agent.id] = ResearchAction(
-                    agent_id=agent.id,
-                    action=empty_content
-                )
+                if phase == "search":
+                    global_actions[agent.id] = WebSearchAction(
+                        agent_id=agent.id,
+                        query=self.config.initial_query,
+                        num_results=self.config.search_config.get('urls_per_query', 5)
+                    )
+                else:
+                    if self.summary_model:
+                        empty_content = self.summary_model.model_construct()
+                        global_actions[agent.id] = ResearchAction(
+                            agent_id=agent.id,
+                            action=empty_content
+                        )
+                    else:
+                        global_actions[agent.id] = StrAction(
+                            agent_id=agent.id,
+                            action=""
+                        )
         
         return global_actions
 

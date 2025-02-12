@@ -36,38 +36,23 @@ class WebSearchResult(BaseModel):
 class WebSearchActionInput(BaseModel):
     """External action model for LLM agents"""
     query: str = Field(..., description="Search query to execute")
-    num_results: int = Field(default=5, description="Number of results to fetch")
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "query": "latest developments in AI technology",
-                    "num_results": 5
-                },
-                {
-                    "query": "current market trends in cryptocurrency",
-                    "num_results": 3
-                }
-            ]
-        }
-    }
+    num_results: Optional[int] = Field(None, description="Number of results to fetch")
 
 class WebSearchAction(LocalAction):
     """Internal action model with additional fields"""
     agent_id: str
     action: str = Field(default="web_search", description="Type of action")
     query: str = Field(..., description="Search query to execute")
-    num_results: int = Field(default=5, description="Number of results to fetch")
+    num_results: Optional[int] = Field(None, description="Number of results to fetch")
 
     @classmethod
     def sample(cls, agent_id: str) -> 'WebSearchAction':
         return cls(
             agent_id=agent_id,
             query="latest developments in AI technology",
-            num_results=5
+            num_results=None
         )
-
+    
     @classmethod
     def from_llm_action(cls, agent_id: str, action: WebSearchActionInput) -> 'WebSearchAction':
         """Create internal action from LLM-generated action"""
@@ -123,22 +108,23 @@ class WebSearchMechanism(Mechanism):
         if not isinstance(data.get("search_config"), WebSearchConfig):
             raise ValueError("search_config must be a WebSearchConfig instance")
             
-        search_config = data["search_config"]
-        
-        self.search_manager = SearchManager(config=search_config)
-        self.content_extractor = ContentExtractor(config=search_config)
-        self.url_fetcher = URLFetcher(config=search_config, prompts={})
+        self.search_config = data["search_config"]
+        self.search_manager = SearchManager(config=self.search_config)
+        self.content_extractor = ContentExtractor(config=self.search_config)
+        self.url_fetcher = URLFetcher(config=self.search_config, prompts={})
 
     async def execute_web_search(
         self,
         query: str,
-        num_results: int
+        num_results: Optional[int] = None
     ) -> List[WebSearchResult]:
         """Execute web search and return results"""
         try:
             self.current_query = query
             
-            urls = await self.search_manager.get_urls_for_query(query, num_results)
+            urls = await self.search_manager.get_urls_for_query(
+                query,
+                self.search_config.urls_per_query)
             
             for url in urls:
                 self.search_manager.query_url_mapping[url] = query
@@ -178,8 +164,16 @@ class WebSearchMechanism(Mechanism):
                         num_results=agent_action.num_results
                     )
                 
+                action_data = {}
+                if isinstance(agent_action, dict):
+                    action_data = agent_action
+                elif isinstance(agent_action, BaseModel):
+                    action_data = agent_action.model_dump()
+                else:
+                    action_data = {"summary": str(agent_action)}
+                
                 obs_data = {
-                    "action": agent_action if isinstance(agent_action, dict) else {"summary": str(agent_action)},
+                    "action": action_data,
                     "round": self.current_round,
                     "status": "success"
                 }
@@ -340,30 +334,62 @@ class WebResearchActionSpace(ActionSpace):
 
 class WebSearchEnvironment(MultiAgentEnvironment):
     """Environment that manages web search operations"""
-    name: str = Field(default="Web Search Environment")
-    mechanism: WebSearchMechanism = Field(...)
+    name: str = Field(
+        default="Web Search Environment",
+        description="Name of the environment"
+    )
+    mechanism: WebSearchMechanism = Field(
+        ...,
+        description="Mechanism that handles web search operations"
+    )
     action_space: WebResearchActionSpace = Field(
         default_factory=WebResearchActionSpace,
-        description="Action space that handles both phases"
+        description="Action space that handles both search and summary phases"
     )
     current_phase: str = Field(
         default="search",
         description="Current action phase (search/summary)"
     )
-    summary_model: Optional[Type[BaseModel]] = None
     internal_state: Dict[str, Any] = Field(
         default_factory=dict,
         description="Internal storage for global state"
     )
-    
-    def __init__(self, summary_model: Type[BaseModel] = None, **data):
-        if "summary" in data.get("current_phase", "") and summary_model is None:
-            raise ValueError("summary_model must be provided when starting in summary phase")
-            
-        super().__init__(**data)
-        self.summary_model = summary_model
+    summary_model: Optional[Type[BaseModel]] = Field(
+        default=None,
+        description="Optional Pydantic model for structuring research summaries"
+    )
+    initial_query: str = Field(
+        ...,
+        description="Initial search query to start the research with"
+    )
+
+    def __init__(
+        self,
+        name: str = "Web Search Environment",
+        initial_query: str = None,
+        summary_model: Optional[Type[BaseModel]] = None,
+        mechanism: Optional[WebSearchMechanism] = None,
+        **data
+    ):
+        """Initialize the web search environment."""
+        if not initial_query:
+            raise ValueError("initial_query must be provided")
+
+        model_data = {
+            "name": name,
+            "initial_query": initial_query,
+            "summary_model": summary_model,
+            "mechanism": mechanism,
+            **data
+        }
+        super().__init__(**model_data)
+        
         self.action_space = WebResearchActionSpace(summary_model=summary_model)
+        
         self.internal_state = {}
+        
+        if hasattr(self.mechanism, 'current_query'):
+            self.mechanism.current_query = initial_query
 
     def switch_phase(self, phase: str):
         """Switch between search and summary phases"""
@@ -412,13 +438,16 @@ class WebSearchEnvironment(MultiAgentEnvironment):
             **self.internal_state,
             **mechanism_state,
             "current_phase": self.current_phase,
+            "initial_query": self.initial_query,
             "summary_model": self.summary_model.__name__ if self.summary_model else None,
             "summary_schema": summary_schema
         }
 
     def reset(self) -> GlobalObservation:
-        """Reset environment state"""
+        """Reset environment state and restore initial query"""
         self.internal_state = {}
         self.current_phase = "search"
+        if hasattr(self.mechanism, 'current_query'):
+            self.mechanism.current_query = self.initial_query
         self.mechanism.reset()
         return GlobalObservation(observations={})
