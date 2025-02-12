@@ -1,7 +1,8 @@
 # config.py
 
-from pydantic import BaseModel, Field
-from typing import Any, List, Dict, Union
+from enum import Enum
+from pydantic import BaseModel, Field, validator
+from typing import Any, List, Dict, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import yaml
 from pathlib import Path
@@ -90,7 +91,7 @@ class WebResearchConfig(BaseModel):
     )
 
 class PredictionMarketConfig(EnvironmentConfig):
-    """Configuration for prediction market environment orchestration"""
+    """Configuration for prediction market environment"""
     name: str = Field(
         default="prediction_markets",
         description="Name of the prediction market environment"
@@ -99,9 +100,13 @@ class PredictionMarketConfig(EnvironmentConfig):
         default="http://localhost:8004",
         description="API endpoint for prediction market environment"
     )
+    market_type: str = Field(
+        default="BINARY",
+        description="Type of market (BINARY or CATEGORICAL)"
+    )
     market: str = Field(
         ...,
-        description="The topic/question being predicted"
+        description="The market poll question"
     )
     description: str = Field(
         ...,
@@ -115,12 +120,6 @@ class PredictionMarketConfig(EnvironmentConfig):
         ...,
         description="Date when the market will be resolved (YYYY-MM-DD)"
     )
-    initial_price: float = Field(
-        default=0.5,
-        description="Initial probability estimate (0-1)",
-        ge=0.0,
-        le=1.0
-    )
     initial_liquidity: float = Field(
         default=1000.0,
         description="Initial liquidity pool size"
@@ -133,6 +132,34 @@ class PredictionMarketConfig(EnvironmentConfig):
         default=100.0,
         description="Maximum bet amount allowed"
     )
+    initial_price: Optional[float] = Field(
+        default=0.5,
+        description="Initial probability estimate for binary markets (0-1)",
+        ge=0.0,
+        le=1.0
+    )
+    outcomes: Optional[List[str]] = Field(
+        default_factory=list,
+        description="List of possible outcomes for categorical markets"
+    )
+    initial_prices: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Initial probabilities for each outcome in categorical markets"
+    )
+
+    @validator('initial_prices')
+    def validate_prices(cls, v, values):
+        if v is not None:
+            if 'outcomes' in values and values['outcomes']:
+                if set(v.keys()) != set(values['outcomes']):
+                    raise ValueError("Initial prices must match outcomes exactly")
+                if not abs(sum(v.values()) - 1.0) < 0.0001:
+                    raise ValueError("Initial prices must sum to 1.0")
+        return v
+
+    model_config = {
+        "extra": "allow"
+    }
 
 class LLMConfigModel(BaseModel):
     name: str = Field(

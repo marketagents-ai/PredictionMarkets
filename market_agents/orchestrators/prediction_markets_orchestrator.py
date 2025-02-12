@@ -7,13 +7,13 @@ from market_agents.memory.agent_storage.storage_service import StorageService
 from market_agents.orchestrators.base_orchestrator import BaseEnvironmentOrchestrator
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.environments.environment import (
-    EnvironmentStep, MultiAgentEnvironment, GlobalAction
+    EnvironmentStep
 )
 from market_agents.environments.mechanisms.prediction_markets import (
     ActionType,
+    BinaryOutcome,
     MarketState,
-    Outcome,
-    PredictionBet,
+    MarketType,
     PredictionMarketEnvironment,
     PredictionMarketLocalAction,
     PredictionMarketMechanism,
@@ -27,9 +27,7 @@ from market_agents.orchestrators.logger_utils import (
     log_persona,
     log_section,
     log_environment_setup,
-    log_running,
-    log_action,
-    log_round,
+    log_action
 )
 from market_agents.orchestrators.orchestration_data_inserter import OrchestrationDataInserter
 from market_agents.orchestrators.parallel_cognitive_steps import ParallelCognitiveProcessor
@@ -68,13 +66,26 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
         """Set up the prediction market environment."""
         log_section(self.logger, "CONFIGURING PREDICTION MARKET ENVIRONMENT")
         
-        initial_market = MarketState(
-            event_id=self.config.name,
-            question=self.config.market,
-            options=["Yes", "No"],
-            total_bets={},
-            current_prices={"Yes": self.config.initial_price, "No": 1 - self.config.initial_price}
-        )
+        if hasattr(self.config, 'initial_price'):
+            initial_market = MarketState(
+                event_id=self.config.name,
+                market_type=MarketType.BINARY,
+                question=self.config.market,
+                options=["Yes", "No"],
+                total_bets={},
+                current_prices={"Yes": self.config.initial_price, "No": 1 - self.config.initial_price}
+            )
+        elif self.config.outcomes and self.config.initial_prices:
+            initial_market = MarketState(
+                event_id=self.config.name,
+                market_type=MarketType.CATEGORICAL,
+                question=self.config.market,
+                options=self.config.outcomes,
+                total_bets={},
+                current_prices=self.config.initial_prices
+            )
+        else:
+            raise ValueError("Invalid market configuration: must specify either initial_price for binary markets or outcomes and initial_prices for categorical markets")  
         
         prediction_mechanism = PredictionMarketMechanism(
             max_rounds=self.orchestrator_config.max_rounds,
@@ -176,15 +187,23 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
                 if content:
                     try:
                         formatted_content = {
+                            'marketType': content.get('market_type'),
                             'actionType': content.get('action_type'),
                             'outcome': content.get('outcome'),
                             'stake': float(content.get('stake')) if content.get('stake') is not None else None,
                             'price': float(content.get('price')) if content.get('price') is not None else None
                         }
                         
+                        outcome = formatted_content['outcome']
+                        if formatted_content['marketType'] == MarketType.BINARY:
+                            outcome = BinaryOutcome(outcome) if outcome else None
+                        elif formatted_content['marketType'] == MarketType.SCALAR:
+                            outcome = float(outcome) if outcome else None
+                        
                         market_action = PredictionMarketAction(
+                            market_type=MarketType(formatted_content['marketType']),
                             action_type=ActionType(formatted_content['actionType']),
-                            outcome=Outcome(formatted_content['outcome']) if formatted_content['outcome'] else None,
+                            outcome=outcome,
                             stake=formatted_content['stake'],
                             price=formatted_content['price']
                         )
@@ -198,7 +217,10 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
                         
                     except Exception as e:
                         self.logger.error(f"Failed to create action for agent {agent.id}: {e}")
-                        market_action = PredictionMarketAction(action_type=ActionType.HOLD)
+                        market_action = PredictionMarketAction(
+                            market_type=self.config.market_type,
+                            action_type=ActionType.HOLD
+                        )
                         local_action = PredictionMarketLocalAction.from_market_action(
                             agent_id=agent.id,
                             action=market_action,
@@ -211,7 +233,10 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
                     
             except Exception as e:
                 self.logger.error(f"Error creating PredictionMarketAction for agent {agent.id}: {str(e)}")
-                market_action = PredictionMarketAction(action_type=ActionType.HOLD)
+                market_action = PredictionMarketAction(
+                    market_type=self.config.market_type,
+                    action_type=ActionType.HOLD
+                )
                 local_action = PredictionMarketLocalAction.from_market_action(
                     agent_id=agent.id,
                     action=market_action,
@@ -263,12 +288,15 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
 
         log_section(self.logger, "MARKET STATES")
         for market_id, market_state in global_observation.market_states.items():
-            self.logger.info(f"Market {market_id}:")
+            self.logger.info(f"Market {market_id} ({market_state.market_type}):")
+            
+            if market_state.market_type == MarketType.SCALAR:
+                self.logger.info(f"  Range: [{market_state.range_min}, {market_state.range_max}]")
+            
             for outcome, price in market_state.current_prices.items():
                 self.logger.info(f"  Current price for {outcome}: {price:.4f}")
             self.logger.info(f"  Total bets: {market_state.total_bets}")
-            if hasattr(market_state, 'liquidity'):
-                self.logger.info(f"  Liquidity: {market_state.liquidity:.2f}")
+            self.logger.info(f"  Total liquidity: {market_state.total_liquidity:.2f}")
 
     async def process_round_results(self, round_num: int, step_result=None, sub_round: int = None):
         """Process and store results for the prediction market round.

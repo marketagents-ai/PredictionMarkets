@@ -53,23 +53,32 @@ class LocalEnvironmentStep(BaseModel):
     info: Dict[str, Any]
 
 
-class ActionType(Enum):
+class MarketType(str, Enum):
+    BINARY = "BINARY"
+    SCALAR = "SCALAR"
+    CATEGORICAL = "CATEGORICAL"
+
+class ActionType(str, Enum):
     BET = "BET"
     HOLD = "HOLD"
 
-class Outcome(Enum):
+class BinaryOutcome(str, Enum):
     YES = "Yes"
     NO = "No"
 
 class PredictionMarketAction(BaseModel):
     """External action model for LLM agents"""
+    market_type: MarketType = Field(
+        ..., 
+        description="Type of market (BINARY, SCALAR, or CATEGORICAL)"
+    )
     action_type: ActionType = Field(
         ..., 
-        description="Type of action ('BET' or 'HOLD')"
+        description="Type of action (BET or HOLD)"
     )
-    outcome: Optional[Outcome] = Field(
+    outcome: Optional[Union[BinaryOutcome, float, str]] = Field(
         None, 
-        description="The outcome to bet on (e.g. 'Yes' or 'No')"
+        description="The outcome to bet on: Yes/No for BINARY, float for SCALAR, string for CATEGORICAL"
     )
     stake: Optional[float] = Field(
         None, 
@@ -85,15 +94,26 @@ class PredictionMarketAction(BaseModel):
     )
 
     @validator('outcome')
-    def validate_outcome_for_bet(cls, v, values):
-        """Ensure outcome is provided for BET actions"""
-        if values.get('action_type') == ActionType.BET and not v:
-            raise ValueError("Outcome must be provided for BET actions")
+    def validate_outcome(cls, v, values):
+        """Validate outcome based on market_type"""
+        if values.get('action_type') == ActionType.HOLD:
+            return v
+            
+        market_type = values.get('market_type')
+        if market_type == MarketType.BINARY:
+            if not isinstance(v, BinaryOutcome):
+                raise ValueError("Binary markets require Yes/No outcomes")
+        elif market_type == MarketType.SCALAR:
+            if not isinstance(v, (int, float)):
+                raise ValueError("Scalar markets require numeric outcomes")
+        elif market_type == MarketType.CATEGORICAL:
+            if not isinstance(v, str):
+                raise ValueError("Categorical markets require string outcomes")
         return v
 
     @validator('stake')
     def validate_stake_for_bet(cls, v, values):
-        """Ensure stake is provided and positive for BET actions"""
+        """Ensure stake is provided and within limits for BET actions"""
         if values.get('action_type') == ActionType.BET:
             if v is None:
                 raise ValueError("Stake must be provided for BET actions")
@@ -103,7 +123,7 @@ class PredictionMarketAction(BaseModel):
 
     @validator('price')
     def validate_price_for_bet(cls, v, values):
-        """Ensure price is provided and between 0 and 1 for BET actions"""
+        """Ensure price is provided and valid for BET actions"""
         if values.get('action_type') == ActionType.BET:
             if v is None:
                 raise ValueError("Price must be provided for BET actions")
@@ -115,12 +135,32 @@ class PredictionMarketAction(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
+                    # Binary market example
+                    "market_type": "BINARY",
                     "action_type": "BET",
                     "outcome": "Yes",
                     "stake": 50.0,
                     "price": 0.7
                 },
                 {
+                    # Categorical market example
+                    "market_type": "CATEGORICAL",
+                    "action_type": "BET",
+                    "outcome": "No Change",
+                    "stake": 75.0,
+                    "price": 0.972
+                },
+                {
+                    # Scalar market example
+                    "market_type": "SCALAR",
+                    "action_type": "BET",
+                    "outcome": 5.25,
+                    "stake": 25.0,
+                    "price": 0.85
+                },
+                {
+                    # Hold action example
+                    "market_type": "BINARY",
                     "action_type": "HOLD",
                     "outcome": None,
                     "stake": None,
@@ -172,27 +212,146 @@ class GlobalPredictionMarketAction(GlobalAction):
         return cls(actions=local_actions)
 
 class MarketState(BaseModel):
+    """Represents the current state of a prediction market"""
     event_id: str = Field(..., description="Unique identifier for the event")
+    market_type: MarketType = Field(..., description="Type of market (BINARY, SCALAR, CATEGORICAL)")
     question: str = Field(..., description="The market poll question")
-    options: List[str] = Field(..., description="List of outcome options (e.g. ['Yes', 'No'])")
-    total_bets: Dict[str, float] = Field(default_factory=dict, description="Total stake per option")
-    current_prices: Dict[str, float] = Field(default_factory=dict, description="Current market probabilities per option")
-    resolved: bool = Field(default=False, description="Whether the event is resolved")
-    outcome: Optional[str] = Field(default=None, description="The resolved outcome, if any")
+    
+    options: Optional[List[str]] = Field(
+        None, 
+        description="List of possible outcomes for BINARY/CATEGORICAL markets"
+    )
+    
+    range_min: Optional[float] = Field(
+        None, 
+        description="Minimum value for SCALAR markets"
+    )
+    range_max: Optional[float] = Field(
+        None, 
+        description="Maximum value for SCALAR markets"
+    )
+    
+    total_bets: Dict[str, float] = Field(
+        default_factory=dict, 
+        description="Total stake per option/value"
+    )
+    current_prices: Dict[str, float] = Field(
+        default_factory=dict, 
+        description="Current market probabilities per option/value"
+    )
+    total_liquidity: float = Field(
+        default=0.0,
+        description="Total liquidity in the market"
+    )
+    resolved: bool = Field(
+        default=False, 
+        description="Whether the event is resolved"
+    )
+    outcome: Optional[Union[str, float]] = Field(
+        default=None, 
+        description="The resolved outcome, if any"
+    )
+
+    @validator('market_type')
+    def validate_market_type(cls, v, values):
+        if v not in [MarketType.BINARY, MarketType.CATEGORICAL]:
+            raise ValueError(f"Invalid market type: {v}")
+        return v
+
+    @validator('options')
+    def validate_options(cls, v, values):
+        if 'market_type' in values:
+            market_type = values['market_type']
+            if market_type in [MarketType.BINARY, MarketType.CATEGORICAL] and not v:
+                raise ValueError(f"{market_type} markets require options list")
+        return v
 
     def update_with_bet(self, bet: PredictionBet):
-        outcome = bet.outcome.value if hasattr(bet.outcome, 'value') else bet.outcome
-        
-        if outcome not in self.options:
-            raise ValueError(f"Outcome {outcome} is not a valid option for event {self.event_id}")
-        
-        self.total_bets[outcome] = self.total_bets.get(outcome, 0.0) + bet.stake
-        total = sum(self.total_bets.get(opt, 0.0) for opt in self.options)
-        if total > 0:
-            self.current_prices = {opt: self.total_bets.get(opt, 0.0) / total for opt in self.options}
+        """Update market state with a new bet"""
+        if self.market_type == MarketType.SCALAR:
+            if not self.range_min <= float(bet.outcome) <= self.range_max:
+                raise ValueError(
+                    f"Outcome {bet.outcome} is outside valid range "
+                    f"[{self.range_min}, {self.range_max}]"
+                )
+            outcome_key = str(bet.outcome)
         else:
-            uniform = 1.0 / len(self.options)
-            self.current_prices = {opt: uniform for opt in self.options}
+            outcome = bet.outcome.value if hasattr(bet.outcome, 'value') else bet.outcome
+            if outcome not in self.options:
+                raise ValueError(
+                    f"Outcome {outcome} is not a valid option for event {self.event_id}"
+                )
+            outcome_key = outcome
+
+        self.total_bets[outcome_key] = self.total_bets.get(outcome_key, 0.0) + bet.stake
+        self.total_liquidity += bet.stake
+
+        if self.market_type == MarketType.SCALAR:
+            total = sum(self.total_bets.values())
+            for value in self.total_bets.keys():
+                self.current_prices[value] = self.total_bets[value] / total
+        else:
+            total = sum(self.total_bets.get(opt, 0.0) for opt in self.options)
+            if total > 0:
+                self.current_prices = {
+                    opt: self.total_bets.get(opt, 0.0) / total 
+                    for opt in self.options
+                }
+            else:
+                uniform = 1.0 / len(self.options)
+                self.current_prices = {opt: uniform for opt in self.options}
+
+    def resolve(self, outcome: Union[str, float]):
+        """Resolve the market with final outcome"""
+        if self.market_type == MarketType.SCALAR:
+            if not self.range_min <= float(outcome) <= self.range_max:
+                raise ValueError(f"Resolution outcome {outcome} is outside valid range")
+        else:
+            if outcome not in self.options:
+                raise ValueError(f"Resolution outcome {outcome} is not a valid option")
+        
+        self.resolved = True
+        self.outcome = outcome
+
+    class Config:
+        schema_extra = {
+            "examples": [
+                {
+                    # Binary market example
+                    "event_id": "fed_50bps_cut_march",
+                    "market_type": "BINARY",
+                    "question": "Will the Fed cut rates by 50+ bps in March 2024?",
+                    "options": ["Yes", "No"],
+                    "total_bets": {"Yes": 1000.0, "No": 9000.0},
+                    "current_prices": {"Yes": 0.1, "No": 0.9},
+                    "total_liquidity": 10000.0,
+                    "resolved": False
+                },
+                {
+                    # Categorical market example
+                    "event_id": "fed_march_decision",
+                    "market_type": "CATEGORICAL",
+                    "question": "What will be the Fed's rate decision in March 2024?",
+                    "options": ["No Change", "25 bps decrease", "50+ bps decrease", "25+ bps increase"],
+                    "total_bets": {"No Change": 9720.0, "25 bps decrease": 140.0, "50+ bps decrease": 100.0, "25+ bps increase": 40.0},
+                    "current_prices": {"No Change": 0.972, "25 bps decrease": 0.014, "50+ bps decrease": 0.01, "25+ bps increase": 0.004},
+                    "total_liquidity": 10000.0,
+                    "resolved": False
+                },
+                {
+                    # Scalar market example
+                    "event_id": "fed_rate_exact",
+                    "market_type": "SCALAR",
+                    "question": "What will be the exact Fed Funds Rate after March 2024 meeting?",
+                    "range_min": 3.5,
+                    "range_max": 5.5,
+                    "total_bets": {"5.25": 8000.0, "5.0": 2000.0},
+                    "current_prices": {"5.25": 0.8, "5.0": 0.2},
+                    "total_liquidity": 10000.0,
+                    "resolved": False
+                }
+            ]
+        }
 
 class PredictionMarketObservation(BaseModel):
     market_states: Dict[str, MarketState] = Field(default_factory=dict, description="States of all markets")
@@ -225,13 +384,28 @@ class PredictionMarketMechanism(Mechanism):
     markets: Dict[str, MarketState] = Field(default_factory=dict)
     sequential: bool = Field(default=False, description="Whether the mechanism is sequential")
     initial_liquidity: float = Field(default=1000.0, description="Initial market liquidity")
-    round_summaries: List[Dict[str, Any]] = Field(default_factory=list, description="History of all round actions")
-    last_step: Optional[EnvironmentStep] = Field(default=None, description="Last environment step")
+    round_summaries: List[Dict[str, Any]] = Field(default_factory=list)
+    last_step: Optional[EnvironmentStep] = None
+    market_config: Optional[Dict[str, Any]] = None
+
+    def initialize_market(self, market_config: Dict[str, Any]) -> None:
+        """Initialize market state from config"""
+        market_id = market_config.get('name', 'default_market')
+        market_type = MarketType(market_config['market_type'].upper())
+        
+        self.markets[market_id] = MarketState(
+            event_id=market_id,
+            market_type=market_type,
+            question=market_config['market'],
+            options=market_config['outcomes'],
+            total_bets={},
+            current_prices=market_config['initial_prices'],
+            total_liquidity=market_config.get('initial_liquidity', self.initial_liquidity)
+        )
 
     def step(self, action: GlobalPredictionMarketAction) -> EnvironmentStep:
         self.current_round += 1
 
-        # Process bets and update markets
         round_actions = {}
         for agent_id, local_action in action.actions.items():
             bet = local_action.action
@@ -239,19 +413,14 @@ class PredictionMarketMechanism(Mechanism):
             
             if bet.action_type != ActionType.HOLD:
                 if bet.event_id not in self.markets:
-                    self.markets[bet.event_id] = MarketState(
-                        event_id=bet.event_id,
-                        question=f"Market poll for event {bet.event_id}",
-                        options=["Yes", "No"],
-                        total_bets={},
-                        current_prices={"Yes": 0.5, "No": 0.5}
-                    )
+                    if self.market_config:
+                        self.initialize_market(self.market_config)
+                    else:
+                        raise ValueError(f"No market configuration found for event {bet.event_id}")
                 self.markets[bet.event_id].update_with_bet(bet)
 
-        # Store round actions in history
         self.round_summaries.append(round_actions)
 
-        # Build local observations for each agent
         local_observations: Dict[str, PredictionMarketLocalObservation] = {}
         agent_rewards: Dict[str, float] = {}
         
@@ -264,7 +433,6 @@ class PredictionMarketMechanism(Mechanism):
             local_observations[agent_id] = local_obs
             agent_rewards[agent_id] = 1.0
 
-        # Check if markets should be resolved
         done = (self.current_round >= self.max_rounds)
         if done:
             for market in self.markets.values():
@@ -272,7 +440,6 @@ class PredictionMarketMechanism(Mechanism):
                     market.resolved = True
                     market.outcome = random.choice(market.options)
 
-        # Create global observation
         global_obs = PredictionMarketGlobalObservation(
             observations=local_observations,
             market_states=self.markets
@@ -324,24 +491,19 @@ class PredictionMarketMechanism(Mechanism):
 
 class PredictionMarketEnvironment(MultiAgentEnvironment):
     name: str = Field(default="Prediction Market", description="Name of the prediction market environment")
-    current_step: int = Field(default=0, description="Current simulation step")
-    max_steps: int = Field(default=10, description="Maximum number of steps")
-    action_space: PredictionMarketActionSpace = Field(
-        default_factory=PredictionMarketActionSpace,
-        description="Action space for prediction markets"
-    )
-    observation_space: PredictionMarketObservationSpace = Field(
-        default_factory=PredictionMarketObservationSpace,
-        description="Observation space for prediction markets"
-    )
-    mechanism: PredictionMarketMechanism = Field(
-        default_factory=lambda: PredictionMarketMechanism(initial_liquidity=1000.0),
-        description="Prediction market mechanism"
-    )
-    history: EnvironmentHistory = Field(
-        default_factory=EnvironmentHistory,
-        description="History of environment steps"
-    )
+    current_step: int = Field(default=0)
+    max_steps: int = Field(default=10)
+    action_space: PredictionMarketActionSpace = Field(default_factory=PredictionMarketActionSpace)
+    observation_space: PredictionMarketObservationSpace = Field(default_factory=PredictionMarketObservationSpace)
+    mechanism: PredictionMarketMechanism
+    history: EnvironmentHistory = Field(default_factory=EnvironmentHistory)
+    market_config: Optional[Dict[str, Any]] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.market_config:
+            self.mechanism.market_config = self.market_config
+            self.mechanism.initialize_market(self.market_config)
 
     def step(self, actions: GlobalPredictionMarketAction) -> EnvironmentStep:
         step_result = self.mechanism.step(actions)

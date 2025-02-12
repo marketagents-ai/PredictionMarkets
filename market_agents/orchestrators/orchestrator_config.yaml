@@ -6,24 +6,24 @@ environment_order:
 #  - group_chat
 #  - research
   - web_research
-#  - prediction_markets
+  - prediction_markets
 tool_mode: true
 agent_config:
   knowledge_base: "hamlet_kb"
   use_llm: true
 llm_configs:
     - name: "gpt-4o"
-      model: "gpt-4o-mini"
+      model: "gpt-4o"
       client: "openai"
-      max_tokens: 1024
-      temperature: 0.5
-      use_cache: true
-    - name: "claude"
-      model: "claude-3-5-sonnet-latest"
-      client: "anthropic"
       max_tokens: 4096
-      temperature: 0.5
+      temperature: 0.7
       use_cache: true
+#    - name: "claude"
+#      model: "claude-3-5-sonnet-latest"
+#      client: "anthropic"
+#      max_tokens: 4096
+#      temperature: 0.5
+#      use_cache: true
 #    - name: "hermes"
 #      model: "openai/NousResearch/Hermes-3-Llama-3.1-8B"
 #      client: "litellm"
@@ -70,28 +70,65 @@ environment_configs:
   prediction_markets:
     name: "prediction_markets"
     api_url: "http://localhost:8004"
-    market: "Will Hamlet take action against King Claudius before Act 4?"
+    market_type: "CATEGORICAL"
+    market: "What will be the Fed's rate decision in March 2024 FOMC meeting?"
     description: |
-      This market predicts whether Hamlet will take direct action against King Claudius 
-      before Act 4 of the play. 'Taking action' is defined as any direct confrontation 
-      or attempt to harm/expose Claudius.
+      This market predicts the exact size of the Federal Reserve's interest rate 
+      decision at the March 2024 FOMC meeting. The current federal funds rate 
+      target range is 5.25%-5.50%.
     resolution_criteria: |
-      The market will resolve to YES if Hamlet makes any direct attempt to confront, 
-      harm, or publicly expose Claudius as a murderer before Act 4. It will resolve 
-      to NO if Hamlet only contemplates action or takes indirect steps without 
-      confrontation.
-    resolution_date: "2024-12-31"
-    initial_price: 0.5
-    initial_liquidity: 1000.0
+      Market will resolve based on the size of the rate change announced in the 
+      March 2024 FOMC statement:
+      - No Change: Fed maintains current rates
+      - 25 bps decrease: Fed cuts by exactly 0.25%
+      - 50+ bps decrease: Fed cuts by 0.50% or more
+      - 25+ bps increase: Fed raises rates by any amount
+    resolution_date: "2024-03-20"
+    initial_prices:
+      "No Change": 0.972
+      "25 bps decrease": 0.014
+      "50+ bps decrease": 0.01
+      "25+ bps increase": 0.004
+    initial_liquidity: 12228577
     min_bet: 1.0
     max_bet: 100.0
+    outcomes:
+      - "No Change"
+      - "25 bps decrease"
+      - "50+ bps decrease"
+      - "25+ bps increase"
+
+#      # Market 2: Binary Outcome (Yes/No)
+#      - name: "fed_march_50bps"
+#        api_url: "http://localhost:8004"
+#        market_type: "BINARY"
+#        market: "Will the Fed cut rates by 50+ bps in March 2024?"
+#        description: |
+#          This market predicts whether the Federal Reserve will implement a rate cut 
+#          of 50 basis points (0.50%) or larger at the March 2024 FOMC meeting.
+#        resolution_criteria: |
+#          Market resolves to YES if:
+#          - The Fed cuts rates by 50 basis points (0.50%) or more
+#          
+#          Market resolves to NO if:
+#          - The Fed makes no change to rates
+#          - The Fed cuts by less than 50 bps
+#          - The Fed raises rates
+#        resolution_date: "2024-03-20"
+#        initial_price: 0.01
+#        initial_liquidity: 2883374
+#        min_bet: 1.0
+#        max_bet: 100.0
+#        outcomes:
+#          - "Yes"
+#          - "No"
 
   web_research:
     name: "web_research"
     api_url: "http://localhost:8005"
-    initial_query: "Top cryptocurrency to invest in right now?"
-    sub_rounds: 2
-    schema_model:
+    initial_query: "What will be the Fed's rate decision in March 2024 FOMC meeting?"
+    sub_rounds: 1
+    schema_model: "FedRateAnalysis"
     search_config:
       max_concurrent_requests: 50
       rate_limit: 0.1

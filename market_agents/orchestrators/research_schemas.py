@@ -49,30 +49,121 @@ class MarketResearch(BaseModel):
     sector: Optional[SectorInfo] = Field(None, description="Sector-level details if 'sector' type.")
     macro: Optional[MacroTrends] = Field(None, description="Macro-level insights if 'macro' type.")
 
-class CharacterAnalysis(BaseModel):
-    """Schema for character analysis in literary works"""
-    name: str = Field(..., description="Character name")
-    role: str = Field(..., description="Character's role in the story")
-    motivation: Optional[str] = Field(None, description="Character's primary motivations")
-    key_quotes: List[str] = Field(default_factory=list, description="Notable quotes by or about the character")
-    relationships: List[str] = Field(default_factory=list, description="Key relationships with other characters")
-    character_arc: Optional[str] = Field(None, description="Character's development through the story")
-    themes: List[str] = Field(default_factory=list, description="Themes associated with this character")
-    interpretation: Optional[str] = Field(None, description="Critical interpretation of the character")
+from typing import List, Optional
+from enum import Enum
+from pydantic import BaseModel, Field
 
-class ThematicElement(BaseModel):
-    theme: str = Field(..., description="Name of the theme")
-    description: str = Field(..., description="Explanation of the theme")
-    examples: List[str] = Field(default_factory=list, description="Textual examples supporting this theme")
-    significance: Optional[str] = Field(None, description="Broader significance of this theme")
+class FedStance(str, Enum):
+    HAWKISH = "hawkish"
+    DOVISH = "dovish"
+    NEUTRAL = "neutral"
 
-class LiteraryAnalysis(BaseModel):
-    """Schema for comprehensive literary analysis"""
-    work_title: str = Field(default="Hamlet", description="Title of the literary work")
-    author: str = Field(default="William Shakespeare", description="Author of the work")
-    characters: List[CharacterAnalysis] = Field(default_factory=list, description="Analysis of key characters")
-    themes: List[ThematicElement] = Field(default_factory=list, description="Major themes in the work")
-    key_scenes: List[str] = Field(default_factory=list, description="Analysis of pivotal scenes")
-    literary_devices: List[str] = Field(default_factory=list, description="Notable literary devices used")
-    historical_context: Optional[str] = Field(None, description="Relevant historical background")
-    interpretation: Optional[str] = Field(None, description="Overall interpretation or analysis")
+class EconomicIndicator(BaseModel):
+    """Key economic indicators influencing Fed decisions"""
+    name: str = Field(..., description="Name of the economic indicator")
+    current_value: str = Field(..., description="Current value or range")
+    trend: str = Field(..., description="Recent trend in the indicator")
+    fed_impact: str = Field(..., description="How this indicator might influence Fed's decision")
+
+class FedSpeaker(BaseModel):
+    """Recent Fed official communications"""
+    name: str = Field(..., description="Name of the Fed official")
+    role: str = Field(..., description="Position at the Fed")
+    stance: FedStance = Field(..., description="Speaker's monetary policy stance")
+    key_quotes: List[str] = Field(default_factory=list, description="Notable quotes about monetary policy")
+    date: str = Field(..., description="Date of the communication")
+
+class MarketExpectation(BaseModel):
+    """Market-based predictions and indicators"""
+    source: str = Field(..., description="Source of the expectation (e.g., CME FedWatch, Wall Street Bank)")
+    probability_no_change: float = Field(..., description="Probability of no rate change")
+    probability_25_cut: float = Field(..., description="Probability of 25 bps cut")
+    probability_50_plus_cut: float = Field(..., description="Probability of 50+ bps cut")
+    probability_hike: float = Field(..., description="Probability of rate hike")
+    rationale: str = Field(..., description="Reasoning behind the probabilities")
+
+class FedRateAnalysis(BaseModel):
+    """Comprehensive analysis for Fed rate decision prediction"""
+    current_rate: Optional[str] = Field(
+        default="5.25%-5.50%",
+        description="Current Federal Funds Rate range"
+    )
+    
+    economic_indicators: List[EconomicIndicator] = Field(
+        default_factory=list,
+        description="Key economic data influencing the decision"
+    )
+    
+    inflation_outlook: Optional[str] = Field(
+        default="Pending analysis",
+        description="Analysis of inflation trends and expectations"
+    )
+    
+    employment_outlook: Optional[str] = Field(
+        default="Pending analysis",
+        description="Analysis of labor market conditions"
+    )
+    
+    recent_fed_communications: List[FedSpeaker] = Field(
+        default_factory=list,
+        description="Recent communications from Fed officials"
+    )
+    
+    market_expectations: List[MarketExpectation] = Field(
+        default_factory=list,
+        description="Market-based predictions and probabilities"
+    )
+    
+    global_factors: List[str] = Field(
+        default_factory=list,
+        description="International factors affecting Fed decision"
+    )
+    
+    technical_analysis: Optional[str] = Field(
+        None,
+        description="Technical market analysis relevant to Fed decision"
+    )
+    
+    risk_factors: List[str] = Field(
+        default_factory=list,
+        description="Key risks that could affect the Fed's decision"
+    )
+    
+    predicted_outcome: Optional[str] = Field(
+        default="Analysis in progress",
+        description="Predicted March FOMC decision with confidence level"
+    )
+    
+    reasoning: Optional[str] = Field(
+        default="Gathering and analyzing data",
+        description="Summary of key reasoning behind the prediction"
+    )
+    
+    sources: List[str] = Field(
+        default_factory=list,
+        description="Sources consulted for this analysis"
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "current_rate": "5.25%-5.50%",
+                "economic_indicators": [{
+                    "name": "CPI",
+                    "current_value": "3.4% YoY",
+                    "trend": "Declining",
+                    "fed_impact": "Supports potential rate cut"
+                }],
+                "inflation_outlook": "Inflation continuing to moderate towards 2% target",
+                "employment_outlook": "Labor market remains resilient but showing signs of cooling",
+                "recent_fed_communications": [{
+                    "name": "Jerome Powell",
+                    "role": "Fed Chair",
+                    "stance": "NEUTRAL",
+                    "key_quotes": ["We need to see more evidence that inflation is sustainably moving down"],
+                    "date": "2024-01-31"
+                }],
+                "predicted_outcome": "No Change (80% confidence)",
+                "reasoning": "Despite moderating inflation, Fed likely to remain cautious..."
+            }
+        }

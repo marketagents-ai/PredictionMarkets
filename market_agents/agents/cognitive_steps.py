@@ -94,7 +94,10 @@ class PerceptionStep(CognitiveStep):
     step_name: str = "perception"
 
     async def execute(self, agent: BaseModel) -> Union[str, Dict[str, Any]]:
-        stm_cognitive = await agent.short_term_memory.retrieve_recent_memories(limit=1)
+        stm_cognitive = await agent.short_term_memory.retrieve_recent_memories(
+            limit=2,
+            cognitive_step="action"
+        )
         short_term_memories = [
             {
                 "cognitive_step": mem.cognitive_step,
