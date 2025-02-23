@@ -43,7 +43,7 @@ export function PredictionMarket() {
 
     agentWs.onmessage = (event) => {
       const action = JSON.parse(event.data)
-      setAgentActions(prev => [action, ...prev].slice(0, 50)) // Keep last 50 actions
+      setAgentActions(prev => [action, ...prev].slice(0, 50))
     }
 
     return () => {
@@ -52,7 +52,8 @@ export function PredictionMarket() {
     }
   }, [])
 
-  if (!marketState) return <div>Loading market...</div>
+  // Change this line to return null or empty div instead of "Loading market..."
+  if (!marketState) return null
 
   const timeRangeButtons = [
     { label: '1H', value: '1H' },

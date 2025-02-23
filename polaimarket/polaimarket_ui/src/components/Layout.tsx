@@ -16,3 +16,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
     </div>
   )
 }
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="en" className="dark h-full">
+      <body className="h-full overflow-hidden bg-zinc-900 text-white">
+        {children}
+      </body>
+    </html>
+  )
+}

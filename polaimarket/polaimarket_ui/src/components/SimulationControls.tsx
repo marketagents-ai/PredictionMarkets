@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface MarketConfig {
   numAgents: number
@@ -13,11 +13,28 @@ interface MarketConfig {
   resolutionDate: string
 }
 
-export function SimulationControls() {
-  const [isRunning, setIsRunning] = useState(false)
+interface SimulationControlsProps {
+  onLogsUpdate: (updater: (prev: string[]) => string[]) => void
+  onRunningChange: (isRunning: boolean) => void
+  onConfigChange?: (config: {
+    question: string;
+    description: string;
+    outcomes: string[];
+    initialPrices: { [key: string]: number };
+    resolutionDate: string;
+  }) => void;
+  isRunning: boolean
+}
+
+export function SimulationControls({ 
+  onLogsUpdate, 
+  onRunningChange, 
+  onConfigChange,
+  isRunning 
+}: SimulationControlsProps) {
   const [config, setConfig] = useState<MarketConfig>({
-    numAgents: 2,
-    maxRounds: 10,
+    numAgents: 4,
+    maxRounds: 2,
     marketType: "CATEGORICAL",
     market: "What will be the Fed's rate decision in March 2024 FOMC meeting?",
     description: "This market predicts the exact size of the Federal Reserve's interest rate decision at the March 2024 FOMC meeting.",
@@ -32,49 +49,29 @@ export function SimulationControls() {
     resolutionDate: "2024-03-20"
   })
 
-  const startSimulation = async () => {
-    try {
-      setIsRunning(true)
-      const response = await fetch('/api/simulation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          numAgents: config.numAgents,
-          maxRounds: config.maxRounds,
-          marketConfig: {
-            market_type: config.marketType,
-            market: config.market,
-            description: config.description,
-            outcomes: config.outcomes,
-            initial_prices: config.initialPrices,
-            initial_liquidity: config.initialLiquidity,
-            resolution_date: config.resolutionDate
-          }
-        })
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to start simulation')
-      }
-      
-      const data = await response.json()
-      console.log('Simulation response:', data)
-    } catch (error) {
-      console.error('Error starting simulation:', error)
-      alert('Failed to start simulation')
-    } finally {
-      setIsRunning(false)
+  // Update parent component whenever config changes
+  useEffect(() => {
+    if (onConfigChange) {
+      const marketData = {
+        question: config.market,
+        description: config.description,
+        outcomes: config.outcomes,
+        initialPrices: config.initialPrices,
+        resolutionDate: config.resolutionDate
+      };
+      onConfigChange(marketData);
     }
-  }
+  }, [config, onConfigChange])
 
-  const updateOutcome = (index: number, value: string) => {
+  const updateOutcome = (index: number, newValue: string) => {
+    const oldOutcome = config.outcomes[index]
     const newOutcomes = [...config.outcomes]
-    newOutcomes[index] = value
+    newOutcomes[index] = newValue
     
-    // Update initial prices with the new outcome
+    // Update prices object with new outcome key
     const newPrices = { ...config.initialPrices }
-    delete newPrices[config.outcomes[index]]
-    newPrices[value] = 0.25 // Default to equal distribution
+    delete newPrices[oldOutcome]
+    newPrices[newValue] = config.initialPrices[oldOutcome] || 1.0 / config.outcomes.length
 
     setConfig({
       ...config,
@@ -83,14 +80,94 @@ export function SimulationControls() {
     })
   }
 
-  const updatePrice = (outcome: string, value: number) => {
+  const updatePrice = (outcome: string, newPrice: number) => {
     setConfig({
       ...config,
       initialPrices: {
         ...config.initialPrices,
-        [outcome]: value
+        [outcome]: newPrice
       }
     })
+  }
+
+  const startSimulation = async () => {
+    try {
+      onRunningChange(true)
+      onLogsUpdate(() => []) // Clear previous logs
+
+      // Ensure market display is updated when simulation starts
+      if (onConfigChange) {
+        onConfigChange({
+          question: config.market,
+          description: config.description,
+          outcomes: config.outcomes,
+          initialPrices: config.initialPrices,
+          resolutionDate: config.resolutionDate
+        });
+      }
+
+      const simulationConfig = {
+        numAgents: Number(config.numAgents),
+        maxRounds: Number(config.maxRounds),
+        marketConfig: {
+          marketType: config.marketType,
+          question: config.market,
+          description: config.description,
+          outcomes: config.outcomes,
+          initialPrices: config.initialPrices,
+          initialLiquidity: Number(config.initialLiquidity),
+          resolutionDate: config.resolutionDate
+        }
+      }
+
+      const response = await fetch('/api/simulation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(simulationConfig)
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new Error('No response body')
+      }
+
+      const decoder = new TextDecoder()
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value)
+          const lines = chunk.split('\n')
+          
+          for (const line of lines) {
+            if (line.trim().startsWith('data: ')) {
+              try {
+                const logData = JSON.parse(line.trim().slice(6))
+                if (logData && typeof logData === 'string' && logData.trim() !== '') {
+                  onLogsUpdate(prev => [...prev, logData.trim()])
+                }
+              } catch (e) {
+                console.error('Failed to parse log data:', e)
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock()
+      }
+
+    } catch (error) {
+      console.error('Error starting simulation:', error)
+      onLogsUpdate(prev => [...prev, `Error: ${error.message || 'Failed to start simulation'}`])
+    } finally {
+      onRunningChange(false)
+    }
   }
 
   return (

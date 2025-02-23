@@ -15,11 +15,12 @@ function ErrorFallback({error}: {error: Error}) {
 export default function Home() {
   return (
     <Layout>
-      <div className="max-w-6xl mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-6">AI Agent Prediction Markets</h1>
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <PredictionMarket />
-        </ErrorBoundary>
+      <div className="h-screen overflow-auto">
+        <div className="max-w-6xl mx-auto p-4">
+          <ErrorBoundary FallbackComponent={ErrorFallback}>
+            <PredictionMarket />
+          </ErrorBoundary>
+        </div>
       </div>
     </Layout>
   )
