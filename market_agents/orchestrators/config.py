@@ -267,7 +267,37 @@ class OrchestratorConfig(BaseSettings):
         extra='ignore'
     )
 
-def load_config(config_path: Path) -> OrchestratorConfig:
+def deep_update(base_dict: dict, update_dict: dict) -> dict:
+    """Recursively update a dictionary."""
+    for key, value in update_dict.items():
+        if (
+            isinstance(value, dict) 
+            and key in base_dict 
+            and isinstance(base_dict[key], dict)
+        ):
+            deep_update(base_dict[key], value)
+        else:
+            base_dict[key] = value
+    return base_dict
+
+def load_config(config_path: Path, overrides: dict = None) -> OrchestratorConfig:
+    """
+    Load config from YAML and apply any overrides.
+    
+    Args:
+        config_path: Path to the YAML config file
+        overrides: Dictionary of overrides that can update any part of the config
+    """
     with open(config_path, 'r') as file:
         config_dict = yaml.safe_load(file)
-    return OrchestratorConfig(**config_dict)
+    
+    # Apply overrides if provided
+    if overrides:
+        config_dict = deep_update(config_dict, overrides)
+        
+    try:
+        return OrchestratorConfig(**config_dict)
+    except Exception as e:
+        logging.error(f"Failed to create config with overrides: {e}")
+        logging.debug(f"Config dict after overrides: {config_dict}")
+        raise

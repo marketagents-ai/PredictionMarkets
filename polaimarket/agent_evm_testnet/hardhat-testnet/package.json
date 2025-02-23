@@ -15,5 +15,8 @@
     "@openzeppelin/contracts-upgradeable": "^4.9.3",
     "@openzeppelin/hardhat-upgrades": "^3.9.0",
     "hardhat": "^2.22.18"
+  },
+  "dependencies": {
+    "ansi-to-html": "^0.7.2"
   }
 }

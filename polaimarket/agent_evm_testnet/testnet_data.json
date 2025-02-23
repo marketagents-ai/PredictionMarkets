@@ -1,5 +1,5 @@
 {
-  "market_factory_address": "0x2C2B9C9a4a25e24B174f26114e8926a9f2128FE4",
+  "market_factory_address": "0xd54b47F8e6A1b97F3A84f63c867286272b273b7C",
   "market_factory_abi": [
     {
       "inputs": [],
@@ -472,7 +472,7 @@
       "type": "function"
     }
   ],
-  "environment_bridge_address": "0x30753E4A8aad7F8597332E813735Def5dD395028",
+  "environment_bridge_address": "0x9F544a3Fc3D1045e6ec49D4ecEF6dCD700457165",
   "hardhat_private_keys": [
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",

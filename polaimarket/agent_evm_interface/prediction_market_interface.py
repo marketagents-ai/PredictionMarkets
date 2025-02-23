@@ -224,3 +224,49 @@ class PredictionMarketInterface(BaseModel):
             'price': event['args']['price'],
             'timestamp': event['args']['timestamp']
         } for event in events]
+    
+    async def get_market_details(self, market_id: int) -> Dict:
+        """Get comprehensive market details including prices and bets"""
+        market_address = self.markets.get(market_id)
+        if not market_address:
+            raise ValueError(f"Market {market_id} not found")
+            
+        market = self.w3.eth.contract(
+            address=market_address,
+            abi=self.market_abi
+        )
+        
+        # Get market data from contract
+        market_data = market.functions.market().call()
+        
+        # Get bet history
+        bet_filter = market.events.BetPlaced.create_filter(fromBlock=0)
+        bets = bet_filter.get_all_entries()
+        
+        # Calculate total volume per outcome
+        total_bets = {}
+        for bet in bets:
+            outcome = bet['args']['outcome']
+            amount = bet['args']['amount']
+            total_bets[outcome] = total_bets.get(outcome, 0) + amount
+
+        return {
+            'description': market_data[0],
+            'market_type': market_data[1],
+            'options': market_data[2],
+            'current_prices': {
+                option: market_data[3] / 1e18 if option == market_data[2][0] else (1 - market_data[3] / 1e18)
+                for option in market_data[2]
+            },
+            'total_liquidity': market_data[3],
+            'resolved': market_data[4],
+            'outcome': market_data[5],
+            'total_bets': total_bets,
+            'recent_trades': [{
+                'bettor': bet['args']['bettor'],
+                'outcome': bet['args']['outcome'],
+                'amount': bet['args']['amount'],
+                'price': bet['args']['price'],
+                'timestamp': bet['args']['timestamp']
+            } for bet in bets[-10:]]  # Last 10 trades
+        }
