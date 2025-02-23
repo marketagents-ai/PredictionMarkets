@@ -1,5 +1,6 @@
 # prediction_market.py
 
+import logging
 from enum import Enum
 from typing import Dict, Any, List, Optional, Type, Union, Tuple
 from pydantic import BaseModel, Field, validator, computed_field
@@ -8,6 +9,12 @@ import random
 import string
 
 from market_agents.environments.environment import ActionSpace, EnvironmentHistory, Mechanism, MultiAgentEnvironment
+from polaimarket.agent_evm_interface.prediction_market_interface import PredictionMarketInterface
+
+# Set up logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 class LocalAction(BaseModel):
     agent_id: str
@@ -387,6 +394,7 @@ class PredictionMarketMechanism(Mechanism):
     round_summaries: List[Dict[str, Any]] = Field(default_factory=list)
     last_step: Optional[EnvironmentStep] = None
     market_config: Optional[Dict[str, Any]] = None
+    last_action: Optional[GlobalPredictionMarketAction] = None  # Add this field
 
     def initialize_market(self, market_config: Dict[str, Any]) -> None:
         """Initialize market state from config"""
@@ -403,9 +411,29 @@ class PredictionMarketMechanism(Mechanism):
             total_liquidity=market_config.get('initial_liquidity', self.initial_liquidity)
         )
 
+    def _create_observations(self) -> Dict[str, PredictionMarketLocalObservation]:
+        """Create observations for all agents"""
+        if not self.last_action:
+            return {}
+            
+        local_observations: Dict[str, PredictionMarketLocalObservation] = {}
+        market_obs = PredictionMarketObservation(market_states=self.markets)
+        
+        # Create observation for each agent that placed a bet
+        for agent_id in self.last_action.actions.keys():
+            local_obs = PredictionMarketLocalObservation(
+                agent_id=agent_id,
+                observation=market_obs
+            )
+            local_observations[agent_id] = local_obs
+            
+        return local_observations
+
     def step(self, action: GlobalPredictionMarketAction) -> EnvironmentStep:
         self.current_round += 1
+        self.last_action = action  # Store last action for observation creation
 
+        # Process bets
         round_actions = {}
         for agent_id, local_action in action.actions.items():
             bet = local_action.action
@@ -421,18 +449,10 @@ class PredictionMarketMechanism(Mechanism):
 
         self.round_summaries.append(round_actions)
 
-        local_observations: Dict[str, PredictionMarketLocalObservation] = {}
-        agent_rewards: Dict[str, float] = {}
+        # Create observations using the helper method
+        local_observations = self._create_observations()
         
-        market_obs = PredictionMarketObservation(market_states=self.markets)
-        for agent_id in action.actions.keys():
-            local_obs = PredictionMarketLocalObservation(
-                agent_id=agent_id,
-                observation=market_obs
-            )
-            local_observations[agent_id] = local_obs
-            agent_rewards[agent_id] = 1.0
-
+        # Check if market is done
         done = (self.current_round >= self.max_rounds)
         if done:
             for market in self.markets.values():
@@ -440,22 +460,45 @@ class PredictionMarketMechanism(Mechanism):
                     market.resolved = True
                     market.outcome = random.choice(market.options)
 
+        # Create global observation
         global_obs = PredictionMarketGlobalObservation(
             observations=local_observations,
             market_states=self.markets
         )
 
+        # Create step result
         step_result = EnvironmentStep(
             global_observation=global_obs,
             done=done,
             info={
                 "round": self.current_round,
-                "agent_rewards": agent_rewards,
+                "agent_rewards": {agent_id: 1.0 for agent_id in action.actions.keys()},
                 "market_states": {k: v.dict() for k, v in self.markets.items()}
             }
         )
         self.last_step = step_result
         return step_result
+
+
+    def _resolve_markets(self):
+        """Resolve markets at end of simulation"""
+        for event_id, market in self.markets.items():
+            if not market.resolved:
+                try:
+                    # Resolve on blockchain
+                    outcome = random.choice(market.options)
+                    tx_hash = self.ethereum_interface.resolve_market(
+                        self.market_contracts[event_id],
+                        outcome
+                    )
+                    logger.info(f"Resolved market {event_id} with outcome {outcome}. TX: {tx_hash}")
+                    
+                    # Update local state
+                    market.resolved = True
+                    market.outcome = outcome
+                    
+                except Exception as e:
+                    logger.error(f"Failed to resolve market: {e}")
 
     def get_global_state(self) -> Dict[str, Any]:
         """Return relevant global state for agent context"""

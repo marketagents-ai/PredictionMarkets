@@ -5,7 +5,7 @@ max_rounds: 1
 environment_order:
 #  - group_chat
 #  - research
-  - web_research
+#  - web_research
   - prediction_markets
 tool_mode: true
 agent_config:

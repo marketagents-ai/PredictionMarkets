@@ -1,6 +1,8 @@
 # main.py
 
+import argparse
 import asyncio
+import json
 import logging
 import random
 import uuid
@@ -163,8 +165,22 @@ async def create_agents(
 
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
-    config = load_config("market_agents/orchestrators/orchestrator_config.yaml")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config-override', type=str, help='JSON string containing any config overrides')
+    args = parser.parse_args()
+
+    overrides = {}
+    if args.config_override:
+        try:
+            overrides = json.loads(args.config_override)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse config overrides: {e}")
+            raise
+
+    config = load_config(
+        "market_agents/orchestrators/orchestrator_config.yaml", 
+        overrides=overrides
+    )
     storage_config = load_config_from_yaml("market_agents/memory/storage_config.yaml")
 
     agents = await create_agents(config, storage_config)

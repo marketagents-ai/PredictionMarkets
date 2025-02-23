@@ -356,7 +356,7 @@ class PredictionMarketsOrchestrator(BaseEnvironmentOrchestrator):
                 
                 if trades_data:
                     await self.data_inserter.insert_trades(trades_data)
-
+            
             self.logger.info(f"Data for prediction market round {round_num} inserted successfully")
             
         except Exception as e:
